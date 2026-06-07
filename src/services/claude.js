@@ -1,6 +1,11 @@
 const Anthropic = require('@anthropic-ai/sdk');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// fix #7: timeout de 45s e 2 retries automáticos em falhas transitórias
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 45_000,
+  maxRetries: 2,
+});
 const MODEL = 'claude-sonnet-4-20250514';
 
 const VOICE_EVELYN = `Você é a Evelyn, nutricionista comportamental. Sua voz é:
