@@ -6,7 +6,8 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ success: false, error: 'Token não fornecido' });
   }
   try {
-    req.user = jwt.verify(header.slice(7), process.env.JWT_SECRET);
+    // fix: fixar algoritmo para evitar algorithm confusion (alg:none, RS256→HS256)
+    req.user = jwt.verify(header.slice(7), process.env.JWT_SECRET, { algorithms: ['HS256'] });
     next();
   } catch {
     return res.status(401).json({ success: false, error: 'Token inválido' });
