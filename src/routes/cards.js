@@ -185,6 +185,26 @@ router.delete('/:id', async (req, res) => {
   } catch (e) { fail(res, e.message); }
 });
 
+// POST /api/cards/carousel-direct — gera slides PNG direto de conteúdo (sem card existente)
+router.post('/carousel-direct', async (req, res) => {
+  try {
+    const { content, drive_folder_url } = req.body;
+    if (!content) return fail(res, 'content obrigatório', 400);
+
+    cleanTmp();
+    const result = await generateCarousel(content, `direct_${req.user.id}`, drive_folder_url || null);
+
+    ok(res, {
+      slides: result.slides,
+      download_url: `/api/cards/carousel-download/${path.basename(result.sessionDir)}`,
+      message: `${result.slides} slides gerados`,
+    });
+  } catch (e) {
+    console.error('[carousel-direct]', e.message);
+    fail(res, e.message);
+  }
+});
+
 // POST /api/cards/:id/carousel — gera slides PNG do carrossel via Puppeteer
 router.post('/:id/carousel', async (req, res) => {
   try {
@@ -197,9 +217,10 @@ router.post('/:id/carousel', async (req, res) => {
       return fail(res, 'Este card não é um carrossel', 400);
     if (!card.content) return fail(res, 'Card sem conteúdo — gere o roteiro primeiro', 400);
 
-    cleanTmp(); // limpa sessões antigas antes de criar nova
+    cleanTmp();
 
-    const result = await generateCarousel(card.content, card.id);
+    const { drive_folder_url } = req.body;
+    const result = await generateCarousel(card.content, card.id, drive_folder_url || null);
 
     ok(res, {
       slides: result.slides,

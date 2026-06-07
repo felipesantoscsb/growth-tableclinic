@@ -84,4 +84,53 @@ async function downloadFromDrive(url, destPath) {
   return { name: meta.data.name, mimeType: meta.data.mimeType };
 }
 
-module.exports = { isDriveUrl, downloadFromDrive, extractDriveFileId };
+// Extrai folder ID de URL de pasta do Drive
+function extractDriveFolderId(url) {
+  const m = url.match(/\/folders\/([a-zA-Z0-9_-]{10,})/);
+  return m ? m[1] : null;
+}
+
+// Lista arquivos de imagem numa pasta do Drive e faz download para destDir
+async function downloadFolderImages(folderUrl, destDir) {
+  const folderId = extractDriveFolderId(folderUrl);
+  if (!folderId) throw new Error('Não foi possível extrair o folder ID da URL do Google Drive');
+
+  let credentials;
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT) {
+    try { credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT); }
+    catch { throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT contém JSON inválido'); }
+  } else if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    credentials = JSON.parse(fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_JSON, 'utf8'));
+  } else {
+    throw new Error('Configure GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT (Railway) ou GOOGLE_SERVICE_ACCOUNT_JSON (local)');
+  }
+
+  const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
+  const drive = google.drive({ version: 'v3', auth });
+
+  const list = await drive.files.list({
+    q: `'${folderId}' in parents and mimeType contains 'image/' and trashed=false`,
+    fields: 'files(id,name,mimeType)',
+    pageSize: 20,
+  });
+
+  const files = list.data.files || [];
+  if (files.length === 0) return [];
+
+  const paths = [];
+  for (const file of files) {
+    const ext = file.mimeType.includes('png') ? 'png' : file.mimeType.includes('webp') ? 'webp' : 'jpg';
+    const destPath = path.join(destDir, `photo_${file.id}.${ext}`);
+    const res = await drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'stream' });
+    await new Promise((resolve, reject) => {
+      const dest = fs.createWriteStream(destPath);
+      res.data.pipe(dest).on('finish', resolve).on('error', reject);
+      res.data.on('error', reject);
+    });
+    paths.push(destPath);
+  }
+
+  return paths;
+}
+
+module.exports = { isDriveUrl, downloadFromDrive, extractDriveFileId, downloadFolderImages };

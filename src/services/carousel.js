@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
+const { downloadFolderImages } = require('./driveDownloader');
 
 const TMP_DIR = path.join(__dirname, '../../tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -89,7 +90,10 @@ function parseSlides(rawContent) {
   return slides;
 }
 
-function buildSlideHtml(slide, index, total) {
+function buildSlideHtml(slide, index, total, photoPath) {
+  const photoB64 = photoPath && fs.existsSync(photoPath)
+    ? `data:image/jpeg;base64,${fs.readFileSync(photoPath).toString('base64')}`
+    : null;
   const accent = slide.isCTA ? THEME.terracota : (slide.bg === THEME.bege ? THEME.verde : THEME.terracota);
   const textLines = slide.text
     .split('\n')
@@ -116,6 +120,12 @@ function buildSlideHtml(slide, index, total) {
     padding: 80px;
     position: relative;
   }
+  ${photoB64 ? `
+  .photo-bg {
+    position: absolute; inset: 0;
+    background: url('${photoB64}') center/cover no-repeat;
+    opacity: 0.18;
+  }` : ''}
   .corner-mark {
     position: absolute;
     top: 40px; left: 48px;
@@ -177,6 +187,7 @@ function buildSlideHtml(slide, index, total) {
 </style>
 </head>
 <body>
+  ${photoB64 ? '<div class="photo-bg"></div>' : ''}
   <div class="corner-mark">TableClinic</div>
   <div class="slide-num">${index + 1} / ${total}</div>
   <div class="accent-bar"></div>
@@ -189,15 +200,24 @@ function buildSlideHtml(slide, index, total) {
 </html>`;
 }
 
-async function generateCarousel(rawContent, cardId) {
+async function generateCarousel(rawContent, cardId, driveFolderUrl) {
   const slides = parseSlides(rawContent);
   if (slides.length === 0) throw new Error('Nenhum slide detectado no conteúdo');
 
   const sessionDir = path.join(TMP_DIR, `carousel_${cardId}_${Date.now()}`);
   fs.mkdirSync(sessionDir);
 
-  // fix: remover --disable-web-security (desnecessário — fontes são carregadas via Google CDN
-  // que não requer CORS no contexto headless; se necessário, usar --host-resolver-rules)
+  // Baixa fotos da pasta do Drive se fornecida
+  let photos = [];
+  if (driveFolderUrl) {
+    try {
+      photos = await downloadFolderImages(driveFolderUrl, sessionDir);
+      console.log(`[carousel] ${photos.length} foto(s) baixada(s) do Drive`);
+    } catch (e) {
+      console.warn('[carousel] Falha ao baixar fotos do Drive:', e.message);
+    }
+  }
+
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -207,10 +227,12 @@ async function generateCarousel(rawContent, cardId) {
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1080, height: 1080, deviceScaleFactor: 2 }); // 2x = 2160px qualidade
+    await page.setViewport({ width: 1080, height: 1080, deviceScaleFactor: 2 });
 
     for (let i = 0; i < slides.length; i++) {
-      const html = buildSlideHtml(slides[i], i, slides.length);
+      // Distribui fotos pelos slides (uma por slide, ciclando se necessário)
+      const photo = photos.length > 0 ? photos[i % photos.length] : null;
+      const html = buildSlideHtml(slides[i], i, slides.length, photo);
       await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15_000 });
 
       // Aguarda fontes do Google carregarem

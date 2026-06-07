@@ -442,7 +442,7 @@ async function gerador(el) {
       <form id="gen-form">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div class="form-group"><label>Formato</label>
-            <select name="format">
+            <select name="format" id="gen-format">
               <option value="reel_curto">Reel Curto (até 30s)</option>
               <option value="reel_medio">Reel Médio (1-1:30)</option>
               <option value="reel_longo">Reel Longo (até 64s)</option>
@@ -461,27 +461,148 @@ async function gerador(el) {
         </div>
         <div class="form-group">
           <label>Briefing (descreva a ideia, tema ou gatilho)</label>
-          <textarea name="briefing" rows="5" placeholder="Ex: A relação entre privação de sono e compulsão alimentar à noite..." required></textarea>
+          <textarea name="briefing" id="gen-briefing" rows="5" placeholder="Ex: A relação entre privação de sono e compulsão alimentar à noite..." required></textarea>
         </div>
-        <button type="submit" class="btn btn-accent btn-full">✨ Gerar com IA</button>
+
+        <!-- Campos extras para carrossel — visíveis apenas quando formato é carrossel -->
+        <div id="carousel-extras" style="display:none">
+          <div style="background:var(--bege);border-radius:8px;padding:14px;margin-bottom:14px">
+            <p style="font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:10px">🎨 Opções de Carrossel</p>
+
+            <div class="form-group" style="margin-bottom:10px">
+              <label style="font-size:.85rem">Modo</label>
+              <div style="display:flex;gap:8px;margin-top:6px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer">
+                  <input type="radio" name="carousel_mode" value="ai" checked> Gerar roteiro com IA e depois criar PNG
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer">
+                  <input type="radio" name="carousel_mode" value="direct"> Já tenho os slides — gerar PNG direto
+                </label>
+              </div>
+            </div>
+
+            <div id="direct-content-field" style="display:none" class="form-group">
+              <label style="font-size:.85rem">Conteúdo dos slides</label>
+              <textarea id="direct-slides-content" rows="8" style="font-size:.82rem;font-family:monospace" placeholder="SLIDE 1: Título de impacto&#10;&#10;SLIDE 2: Conteúdo do slide&#10;&#10;SLIDE 3: Mais conteúdo&#10;&#10;SLIDE FINAL: CTA"></textarea>
+              <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Use SLIDE 1, SLIDE 2... SLIDE FINAL para separar os slides.</p>
+            </div>
+
+            <div class="form-group" style="margin-bottom:0">
+              <label style="font-size:.85rem">Pasta de fotos no Google Drive <span style="color:var(--muted)">(opcional)</span></label>
+              <input type="url" id="drive-folder-url" placeholder="https://drive.google.com/drive/folders/..." style="font-size:.85rem">
+              <p style="font-size:.75rem;color:var(--muted);margin-top:4px">As fotos serão usadas como fundo sutil nos slides. Compartilhe a pasta com a service account.</p>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-accent btn-full" id="gen-submit-btn">✨ Gerar com IA</button>
       </form>
     </div>
     <div id="gen-result" style="max-width:680px;margin-top:20px"></div>
   `;
 
+  // Mostra/oculta campos de carrossel e ajusta label do botão
+  const formatSel = el.querySelector('#gen-format');
+  const carouselExtras = el.querySelector('#carousel-extras');
+  const submitBtn = el.querySelector('#gen-submit-btn');
+  const directField = el.querySelector('#direct-content-field');
+
+  function updateCarouselUI() {
+    const isCarousel = ['carrossel','carrossel_video'].includes(formatSel.value);
+    carouselExtras.style.display = isCarousel ? 'block' : 'none';
+    const mode = el.querySelector('input[name="carousel_mode"]:checked')?.value || 'ai';
+    if (isCarousel && mode === 'direct') {
+      submitBtn.textContent = '🎨 Gerar slides PNG';
+      directField.style.display = 'block';
+      el.querySelector('#gen-briefing').required = false;
+    } else {
+      submitBtn.textContent = '✨ Gerar com IA';
+      directField.style.display = 'none';
+      el.querySelector('#gen-briefing').required = true;
+    }
+  }
+
+  formatSel.addEventListener('change', updateCarouselUI);
+  el.querySelectorAll('input[name="carousel_mode"]').forEach(r => r.addEventListener('change', updateCarouselUI));
+
+  // Helper para renderizar resultado de carrossel (slides PNG)
+  function renderCarouselResult(resultEl, cardId, driveFolderUrl) {
+    return `
+      <div style="margin-top:14px;border-top:1px solid var(--bege);padding-top:14px">
+        <button class="btn btn-accent btn-sm" id="inline-carousel-btn">🎨 Gerar slides PNG</button>
+        <div id="inline-carousel-result" style="margin-top:10px"></div>
+      </div>`;
+  }
+
+  function attachCarouselBtn(resultEl, cardId, driveFolderUrl) {
+    const btn = resultEl.querySelector('#inline-carousel-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = '⏳ Gerando slides...';
+      const slideResult = resultEl.querySelector('#inline-carousel-result');
+      slideResult.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
+      try {
+        const data = await api('POST', `/cards/${cardId}/carousel`, driveFolderUrl ? { drive_folder_url: driveFolderUrl } : undefined);
+        slideResult.innerHTML = `
+          <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+            <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+          </div>`;
+        toast(`${data.slides} slides prontos!`);
+      } catch (e) {
+        slideResult.innerHTML = `<p style="color:#c0392b;font-size:.85rem">Erro: ${safeHtml(e.message)}</p>`;
+        toast(e.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🎨 Gerar slides PNG';
+      }
+    });
+  }
+
   el.querySelector('#gen-form').addEventListener('submit', async e => {
     e.preventDefault();
-    const btn = e.target.querySelector('button');
+    const btn = e.target.querySelector('#gen-submit-btn');
     btn.disabled = true;
-    btn.textContent = '⏳ Gerando...';
     const result = document.getElementById('gen-result');
-    result.innerHTML = '<div class="loading"><div class="spinner"></div> Gerando conteúdo com IA...</div>';
+    const format = formatSel.value;
+    const isCarousel = ['carrossel','carrossel_video'].includes(format);
+    const mode = el.querySelector('input[name="carousel_mode"]:checked')?.value || 'ai';
+    const driveFolderUrl = el.querySelector('#drive-folder-url').value.trim() || null;
 
+    // Modo direto: já tem slides, gera PNG sem IA
+    if (isCarousel && mode === 'direct') {
+      const content = el.querySelector('#direct-slides-content').value.trim();
+      if (!content) { toast('Cole o conteúdo dos slides', 'error'); btn.disabled = false; return; }
+      btn.textContent = '⏳ Gerando slides...';
+      result.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
+      try {
+        const data = await api('POST', '/cards/carousel-direct', { content, drive_folder_url: driveFolderUrl });
+        result.innerHTML = `
+          <div class="card">
+            <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+              <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+            </div>
+          </div>`;
+        toast(`${data.slides} slides prontos!`);
+      } catch (err) {
+        result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${safeHtml(err.message)}</p></div>`;
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🎨 Gerar slides PNG';
+      }
+      return;
+    }
+
+    // Modo IA (padrão)
+    const fd = new FormData(e.target);
+    const body = Object.fromEntries(fd.entries());
+    btn.textContent = '⏳ Gerando...';
+    result.innerHTML = '<div class="loading"><div class="spinner"></div> Gerando conteúdo com IA...</div>';
     try {
-      const fd = new FormData(e.target);
-      const body = Object.fromEntries(fd.entries());
       const card = await api('POST', '/generate/content', body);
-      const isCarousel = ['carrossel','carrossel_video'].includes(card.format || body.format);
       result.innerHTML = `
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -490,44 +611,17 @@ async function gerador(el) {
           </div>
           <div class="ai-output">${safeHtml(card.content) || '(sem conteúdo)'}</div>
           <p style="color:var(--muted);font-size:.8rem;margin-top:10px">Card #${card.id} salvo no calendário como rascunho.</p>
-          ${isCarousel ? `
-          <div style="margin-top:14px;border-top:1px solid var(--bege);padding-top:14px">
-            <button class="btn btn-accent btn-sm" id="inline-carousel-btn">🎨 Gerar slides PNG</button>
-            <div id="inline-carousel-result" style="margin-top:10px"></div>
-          </div>` : ''}
+          ${isCarousel ? renderCarouselResult(result, card.id, driveFolderUrl) : ''}
         </div>
       `;
-      if (isCarousel) {
-        result.querySelector('#inline-carousel-btn').addEventListener('click', async () => {
-          const slideBtn = result.querySelector('#inline-carousel-btn');
-          const slideResult = result.querySelector('#inline-carousel-result');
-          slideBtn.disabled = true;
-          slideBtn.textContent = '⏳ Gerando slides...';
-          slideResult.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
-          try {
-            const data = await api('POST', `/cards/${card.id}/carousel`);
-            slideResult.innerHTML = `
-              <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
-                <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
-                <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
-              </div>`;
-            toast(`${data.slides} slides prontos!`);
-          } catch (e) {
-            slideResult.innerHTML = `<p style="color:#c0392b;font-size:.85rem">Erro: ${safeHtml(e.message)}</p>`;
-            toast(e.message, 'error');
-          } finally {
-            slideBtn.disabled = false;
-            slideBtn.textContent = '🎨 Gerar slides PNG';
-          }
-        });
-      }
+      if (isCarousel) attachCarouselBtn(result, card.id, driveFolderUrl);
       toast('Conteúdo gerado e salvo!');
     } catch (err) {
       result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${err.message}</p></div>`;
       toast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '✨ Gerar com IA';
+      btn.textContent = isCarousel ? '🎨 Gerar slides PNG' : '✨ Gerar com IA';
     }
   });
 }
