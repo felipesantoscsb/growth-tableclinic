@@ -17,7 +17,8 @@ router.get('/', async (req, res) => {
     }
     if (format) { params.push(format); where.push(`format = $${params.length}`); }
     if (pilar) { params.push(pilar); where.push(`pilar = $${params.length}`); }
-    if (responsible_id) { params.push(responsible_id); where.push(`responsible_id = $${params.length}`); }
+    // fix #6b: nutri não pode filtrar por responsible_id alheio via query string
+    if (responsible_id && req.user.role !== 'nutri') { params.push(responsible_id); where.push(`responsible_id = $${params.length}`); }
     if (status) { params.push(status); where.push(`status = $${params.length}`); }
     if (from) { params.push(from); where.push(`publish_date >= $${params.length}`); }
     if (to) { params.push(to); where.push(`publish_date <= $${params.length}`); }
@@ -36,17 +37,26 @@ router.get('/', async (req, res) => {
 router.get('/week', async (req, res) => {
   try {
     const ref = req.query.date ? new Date(req.query.date) : new Date();
+    // fix #6: domingo (getDay=0) deve recuar 6 dias, não avançar 1
     const day = ref.getDay();
-    const mon = new Date(ref); mon.setDate(ref.getDate() - day + 1);
+    const offset = day === 0 ? 6 : day - 1;
+    const mon = new Date(ref); mon.setDate(ref.getDate() - offset);
     const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
 
-    const extra = req.user.role === 'nutri' ? `AND responsible_id = ${req.user.id}` : '';
+    // fix #4: usar parâmetro posicional em vez de interpolação
+    const params = [mon.toISOString(), sun.toISOString()];
+    const where = ['archived=false', 'publish_date BETWEEN $1 AND $2'];
+    if (req.user.role === 'nutri') {
+      params.push(req.user.id);
+      where.push(`responsible_id = $${params.length}`);
+    }
+
     const { rows } = await db.query(
       `SELECT cc.*, u.name AS responsible_name FROM content_cards cc
        LEFT JOIN users u ON u.id = cc.responsible_id
-       WHERE archived=false AND publish_date BETWEEN $1 AND $2 ${extra}
+       WHERE ${where.join(' AND ')}
        ORDER BY publish_date`,
-      [mon.toISOString(), sun.toISOString()]
+      params
     );
     ok(res, rows);
   } catch (e) { fail(res, e.message); }
@@ -58,13 +68,20 @@ router.get('/month', async (req, res) => {
     const from = new Date(year, month - 1, 1);
     const to = new Date(year, month, 0, 23, 59, 59);
 
-    const extra = req.user.role === 'nutri' ? `AND responsible_id = ${req.user.id}` : '';
+    // fix #4: usar parâmetro posicional em vez de interpolação
+    const params = [from.toISOString(), to.toISOString()];
+    const whereM = ['archived=false', 'publish_date BETWEEN $1 AND $2'];
+    if (req.user.role === 'nutri') {
+      params.push(req.user.id);
+      whereM.push(`responsible_id = $${params.length}`);
+    }
+
     const { rows } = await db.query(
       `SELECT cc.*, u.name AS responsible_name FROM content_cards cc
        LEFT JOIN users u ON u.id = cc.responsible_id
-       WHERE archived=false AND publish_date BETWEEN $1 AND $2 ${extra}
+       WHERE ${whereM.join(' AND ')}
        ORDER BY publish_date`,
-      [from.toISOString(), to.toISOString()]
+      params
     );
     ok(res, rows);
   } catch (e) { fail(res, e.message); }
@@ -106,11 +123,13 @@ router.put('/:id', async (req, res) => {
       return fail(res, 'Acesso negado', 403);
 
     const { title, pilar, format, responsible_id, status, publish_date, drive_link, content } = req.body;
+    // fix #5: nutri não pode reassinar o card para outro responsible_id
+    const respId = req.user.role === 'nutri' ? req.user.id : (responsible_id || existing[0].responsible_id);
     const { rows } = await db.query(
       `UPDATE content_cards SET title=$1,pilar=$2,format=$3,responsible_id=$4,status=$5,
        publish_date=$6,drive_link=$7,content=$8,updated_at=NOW()
        WHERE id=$9 RETURNING *`,
-      [title, pilar, format, responsible_id, status, publish_date || null, drive_link || null, content || null, req.params.id]
+      [title, pilar, format, respId, status, publish_date || null, drive_link || null, content || null, req.params.id]
     );
     ok(res, rows[0]);
   } catch (e) { fail(res, e.message); }
@@ -118,12 +137,17 @@ router.put('/:id', async (req, res) => {
 
 router.put('/:id/status', async (req, res) => {
   try {
+    // fix #2: verificar ownership antes de atualizar status
+    const { rows: existing } = await db.query('SELECT * FROM content_cards WHERE id=$1 AND archived=false', [req.params.id]);
+    if (!existing[0]) return fail(res, 'Card não encontrado', 404);
+    if (req.user.role === 'nutri' && existing[0].responsible_id !== req.user.id)
+      return fail(res, 'Acesso negado', 403);
+
     const { status } = req.body;
     const { rows } = await db.query(
       `UPDATE content_cards SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
       [status, req.params.id]
     );
-    if (!rows[0]) return fail(res, 'Card não encontrado', 404);
     ok(res, rows[0]);
   } catch (e) { fail(res, e.message); }
 });
