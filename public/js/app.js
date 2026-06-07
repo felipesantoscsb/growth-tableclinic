@@ -281,7 +281,7 @@ async function calendario(el) {
         new Date(c.publish_date).getMonth()===m && new Date(c.publish_date).getFullYear()===y);
       html += `<div class="cal-day${isToday?' today':''}">
         <div class="day-num">${d}</div>
-        ${dayCards.map(c=>`<div class="cal-card pilar-${c.pilar}" data-id="${c.id}" title="${c.title}">${c.title}</div>`).join('')}
+        ${dayCards.map(c=>`<div class="cal-card pilar-${c.pilar}" data-id="${c.id}" title="${safeHtml(c.title)}">${safeHtml(c.title)}</div>`).join('')}
       </div>`;
     }
     html += '</div>';
@@ -310,7 +310,7 @@ async function calendario(el) {
         <div class="week-day">
           <div class="week-day-header${isToday?' style="background:var(--terracota)"':''}">${d.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit'})}</div>
           <div style="padding:8px;background:white;border:1px solid var(--bege-dark);min-height:160px">
-            ${dayCards.map(c=>`<div class="cal-card pilar-${c.pilar}" data-id="${c.id}">${c.title}</div>`).join('')}
+            ${dayCards.map(c=>`<div class="cal-card pilar-${c.pilar}" data-id="${c.id}">${safeHtml(c.title)}</div>`).join('')}
           </div>
         </div>
       `;
@@ -343,7 +343,7 @@ function openCardDetail(card) {
       ${badgePilar(card.pilar)} ${badgeFormat(card.format)} ${badgeStatus(card.status)}
       ${card.generated_by_ai ? '<span class="badge" style="background:#f0e8ff;color:#5a2d9a">✨ IA</span>' : ''}
     </div>
-    <h2>${card.title}</h2>
+    <h2>${safeHtml(card.title)}</h2>
     <p style="color:var(--muted);font-size:.85rem;margin-bottom:16px">
       Responsável: ${card.responsible_name || '—'} · Publicação: ${formatDate(card.publish_date)}
     </p>
@@ -381,7 +381,7 @@ function openCardDetail(card) {
       resultEl.innerHTML = `
         <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
-          <a href="${data.download_url}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
         </div>
       `;
       toast(`${data.slides} slides prontos!`);
@@ -559,7 +559,7 @@ async function anuncios(el) {
             <span>Variação ${i+1}</span>
             <button class="btn btn-sm btn-outline copy-btn" data-text="${encodeURIComponent(c.text)}">Copiar</button>
           </div>
-          <pre>${c.text}</pre>
+          <pre>${safeHtml(c.text)}</pre>
         </div>
       `).join('');
       result.querySelectorAll('.copy-btn').forEach(b => {
@@ -696,7 +696,7 @@ async function edicao(el) {
               ${opsList.map(o=>`<div style="font-size:.88rem;padding:5px 0;border-bottom:1px solid var(--bege-dark)">${o}</div>`).join('')}
             </div>
           ` : ''}
-          <a href="${data.download_url}" download class="btn btn-accent btn-full">⬇ Baixar vídeo editado (MP4)</a>
+          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-full">⬇ Baixar vídeo editado (MP4)</a>
         </div>
       `;
       toast('Vídeo editado com sucesso!');
@@ -805,8 +805,8 @@ async function insights(el) {
           <div class="card-grid">
             ${campaigns.slice(0,6).map(c=>`
               <div style="background:var(--bege);border-radius:8px;padding:12px">
-                <strong style="font-size:.9rem">${c.name}</strong>
-                <p style="font-size:.8rem;color:var(--muted);margin-top:4px">${c.status} · ${c.objective || ''}</p>
+                <strong style="font-size:.9rem">${safeHtml(c.name)}</strong>
+                <p style="font-size:.8rem;color:var(--muted);margin-top:4px">${safeHtml(c.status)} · ${safeHtml(c.objective || '')}</p>
               </div>
             `).join('')}
           </div>
