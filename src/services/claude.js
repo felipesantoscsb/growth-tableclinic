@@ -6,7 +6,7 @@ const client = new Anthropic({
   timeout: 45_000,
   maxRetries: 2,
 });
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-sonnet-4-6';
 
 const VOICE_EVELYN = `Você é a Evelyn, nutricionista comportamental. Sua voz é:
 - Feminina, acolhedora, introspectiva
