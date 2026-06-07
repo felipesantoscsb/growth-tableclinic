@@ -44,9 +44,15 @@ function parseSlides(rawContent) {
     // Detecta cor de fundo sugerida
     const bgMatch = trimmed.match(/cor\s+de\s+fundo[:\s]*([#\w]+)/i);
     if (bgMatch) {
-      const c = bgMatch[1].trim();
-      current.bg = c.startsWith('#') ? c : (THEME[c] || current.bg);
-      current.textColor = current.bg === THEME.bege ? THEME.verde : THEME.bege;
+      const raw = bgMatch[1].trim();
+      // fix CSS injection: aceitar apenas hex válido ou nomes do tema
+      const safeColor = /^#[0-9a-fA-F]{3,6}$/.test(raw)
+        ? raw
+        : (THEME[raw.toLowerCase()] || null);
+      if (safeColor) {
+        current.bg = safeColor;
+        current.textColor = current.bg === THEME.bege ? THEME.verde : THEME.bege;
+      }
       continue;
     }
 
@@ -190,9 +196,11 @@ async function generateCarousel(rawContent, cardId) {
   const sessionDir = path.join(TMP_DIR, `carousel_${cardId}_${Date.now()}`);
   fs.mkdirSync(sessionDir);
 
+  // fix: remover --disable-web-security (desnecessário — fontes são carregadas via Google CDN
+  // que não requer CORS no contexto headless; se necessário, usar --host-resolver-rules)
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security'],
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
   const imagePaths = [];
