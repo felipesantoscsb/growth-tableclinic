@@ -7,6 +7,7 @@ const path = require('path');
 
 const app = express();
 
+app.set('trust proxy', 1); // Railway / Heroku / qualquer proxy reverso
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
