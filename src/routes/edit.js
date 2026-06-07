@@ -30,11 +30,15 @@ router.post('/video', async (req, res) => {
 
 // GET /api/edit/download/:sessionId — serve o vídeo editado para download
 router.get('/download/:sessionId', (req, res) => {
-  // Valida que o sessionId não tenta path traversal
   const sessionId = req.params.sessionId;
   if (!/^video_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
 
-  const outputPath = path.join(__dirname, '../../tmp', sessionId, 'output.mp4');
+  // fix path traversal: confirmar que o caminho resolvido está contido em tmp/
+  const TMP_DIR = path.resolve(__dirname, '../../tmp');
+  const sessionDir = path.resolve(TMP_DIR, sessionId);
+  if (!sessionDir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
+
+  const outputPath = path.join(sessionDir, 'output.mp4');
   if (!fs.existsSync(outputPath)) return fail(res, 'Arquivo não encontrado ou expirado', 404);
 
   res.setHeader('Content-Disposition', `attachment; filename="tableclinic_${sessionId}.mp4"`);

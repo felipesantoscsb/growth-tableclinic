@@ -198,7 +198,12 @@ router.get('/carousel-download/:sessionId', (req, res) => {
   const sessionId = req.params.sessionId;
   if (!/^carousel_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
 
-  const dir = path.join(__dirname, '../../tmp', sessionId);
+  // fix path traversal: confirmar que o dir resolvido está contido em tmp/
+  const TMP_DIR = path.resolve(__dirname, '../../tmp');
+  const dir = path.resolve(TMP_DIR, sessionId);
+  if (!dir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
+
+  if (!fs.existsSync(dir)) return fail(res, 'Sessão não encontrada ou expirada', 404);
   const zipFile = fs.readdirSync(dir).find(f => f.endsWith('.zip'));
   if (!zipFile) return fail(res, 'ZIP não encontrado ou expirado', 404);
 
