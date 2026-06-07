@@ -16,41 +16,74 @@ const THEME = {
   branco:    '#FFFFFF',
 };
 
-// Parseia o texto do Claude em slides estruturados
+// Cabeçalho de slide tolerante: aceita markdown (#, *, >, -), rótulos variados e
+// qualificadores como "(HOOK)". Ex.: "SLIDE 1", "**SLIDE 2:**", "## Slide 3 (CTA)",
+// "CARD 1 -", "Página 4:", "VÍDEO DE CAPA".
+const SLIDE_HEADER_RE = /^[#>*\-\s]*\**\s*(SLIDE\s*\d+|SLIDE\s+FINAL|CARD\s*\d+|P[ÁA]GINA\s*\d+|TELA\s*\d+|V[ÍI]?DEO\s+DE\s+CAPA)\b(.*)$/i;
+
+function blockToSlide(chunk, i, total) {
+  const isFirst = i === 0;
+  const isLast = i === total - 1;
+  return {
+    label: isFirst ? 'SLIDE 1' : isLast ? 'SLIDE FINAL' : `SLIDE ${i + 1}`,
+    text: chunk.trim(),
+    bg: isFirst || isLast ? THEME.verde : THEME.bege,
+    textColor: isFirst || isLast ? THEME.bege : THEME.verde,
+    fontSize: isFirst ? 52 : 40,
+    isHook: isFirst,
+    isCTA: isLast,
+  };
+}
+
+// Parseia o texto (do Claude ou digitado) em slides estruturados
 function parseSlides(rawContent) {
+  let content = String(rawContent || '').replace(/\r/g, '');
+
+  // 1. Remove a seção final de LEGENDA/CAPTION — ela não é um slide
+  const legenda = content.match(/^[\s>*#-]*\**\s*(LEGENDA|CAPTION|DESCRI[ÇC][ÃA]O)\b/im);
+  if (legenda && legenda.index > 0) content = content.slice(0, legenda.index);
+
+  // 2. Remove divisores horizontais (---, ***, ___) — viram quebra de parágrafo
+  content = content.replace(/^[ \t]*([-*_]){3,}[ \t]*$/gm, '');
+
+  const lines = content.split('\n');
   const slides = [];
-  const lines = rawContent.split('\n');
   let current = null;
+  let headerCount = 0;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) { if (current && current.text) current.text += '\n'; continue; }
 
-    // Detecta cabeçalho de slide: "SLIDE 1", "SLIDE FINAL", "VÍDEO DE CAPA"
-    const slideMatch = trimmed.match(/^(SLIDE\s*\d+|SLIDE\s+FINAL|VÍ?DEO\s+DE\s+CAPA)[:\s]*(.*)?$/i);
-    if (slideMatch) {
+    const h = trimmed.match(SLIDE_HEADER_RE);
+    if (h) {
+      headerCount++;
       if (current) slides.push(current);
+      const label = h[1].toUpperCase().replace(/\s+/g, ' ');
+      // Texto na mesma linha do cabeçalho: remove bold, qualificador "(HOOK)" e separador
+      let inline = h[2].replace(/\*+/g, '').trim()
+        .replace(/^\([^)]*\)\s*/, '')
+        .replace(/^[:：•\-–—]\s*/, '')
+        .trim();
       current = {
-        label: slideMatch[1].toUpperCase(),
-        text: slideMatch[2]?.trim() || '',
+        label,
+        text: inline,
         bg: THEME.verde,
         textColor: THEME.bege,
         fontSize: 48,
-        isHook: slideMatch[1].match(/SLIDE\s*1/i) !== null,
-        isCTA: slideMatch[1].match(/FINAL/i) !== null,
+        isHook: /(SLIDE\s*1\b|CAPA)/.test(label),
+        isCTA: /FINAL/.test(label),
       };
       continue;
     }
 
     if (!current) continue;
 
-    // Detecta cor de fundo sugerida
+    // Cor de fundo sugerida
     const bgMatch = trimmed.match(/cor\s+de\s+fundo[:\s]*([#\w]+)/i);
     if (bgMatch) {
       const raw = bgMatch[1].trim();
-      // fix CSS injection: aceitar apenas hex válido ou nomes do tema
-      const safeColor = /^#[0-9a-fA-F]{3,6}$/.test(raw)
-        ? raw
-        : (THEME[raw.toLowerCase()] || null);
+      const safeColor = /^#[0-9a-fA-F]{3,6}$/.test(raw) ? raw : (THEME[raw.toLowerCase()] || null);
       if (safeColor) {
         current.bg = safeColor;
         current.textColor = current.bg === THEME.bege ? THEME.verde : THEME.bege;
@@ -58,37 +91,35 @@ function parseSlides(rawContent) {
       continue;
     }
 
-    // Detecta tamanho de fonte sugerido
+    // Tamanho de fonte sugerido
     const sizeMatch = trimmed.match(/tamanho[:\s]*(\d+)/i);
     if (sizeMatch) { current.fontSize = parseInt(sizeMatch[1], 10); continue; }
 
-    // Acumula o texto do slide
-    if (trimmed && !trimmed.match(/^(especificaç|fonte:|visual:|fundo:)/i)) {
-      current.text += (current.text ? '\n' : '') + trimmed;
+    // Acumula texto (limpa marcadores de lista/markdown e linhas de especificação visual)
+    const cleaned = trimmed.replace(/^[#>\-*]+\s*/, '').replace(/\*\*/g, '').trim();
+    if (cleaned && !/^(especificaç|fonte\s*:|visual\s*:|fundo\s*:)/i.test(cleaned)) {
+      current.text += (current.text ? '\n' : '') + cleaned;
     }
   }
 
   if (current) slides.push(current);
 
-  // Fallback: se parsing não gerou nenhum slide, quebra por parágrafos
-  if (slides.length === 0) {
-    const chunks = rawContent.split(/\n{2,}/).filter(c => c.trim());
-    chunks.forEach((chunk, i) => {
-      const isFirst = i === 0;
-      const isLast  = i === chunks.length - 1;
-      slides.push({
-        label: isFirst ? 'SLIDE 1' : isLast ? 'SLIDE FINAL' : `SLIDE ${i + 1}`,
-        text: chunk.trim(),
-        bg: isFirst || isLast ? THEME.verde : THEME.bege,
-        textColor: isFirst || isLast ? THEME.bege : THEME.verde,
-        fontSize: isFirst ? 52 : 40,
-        isHook: isFirst,
-        isCTA: isLast,
-      });
-    });
+  let result = slides.filter(s => s.text && s.text.trim());
+
+  // 3. Fallback: nenhum cabeçalho reconhecido → divide por parágrafos (linhas em branco)
+  if (headerCount === 0) {
+    const blocks = content
+      .split(/\n\s*\n/)
+      .map(b => b.replace(/^[#>\-*\s]+/, '').replace(/\*\*/g, '').trim())
+      .filter(Boolean);
+    if (blocks.length > 1) {
+      result = blocks.map((chunk, i) => blockToSlide(chunk, i, blocks.length));
+    } else if (blocks.length === 1) {
+      result = [blockToSlide(blocks[0], 0, 1)];
+    }
   }
 
-  return slides;
+  return result;
 }
 
 function buildSlideHtml(slide, index, total, photoPath) {
@@ -279,4 +310,4 @@ function cleanTmp() {
   });
 }
 
-module.exports = { generateCarousel, cleanTmp };
+module.exports = { generateCarousel, cleanTmp, parseSlides };
