@@ -27,9 +27,13 @@ async function runWeeklyReport() {
       tema: 'tendências semanais em nutrição comportamental, bem-estar feminino e comportamento alimentar no Instagram Brasil',
     });
 
+    // fix #8: buscar ID do admin para preencher created_by (evita NULL e quebra futura se NOT NULL)
+    const { rows: adminRows } = await db.query(`SELECT id FROM users WHERE role='admin' LIMIT 1`);
+    const adminId = adminRows[0]?.id || null;
+
     const { rows } = await db.query(
-      `INSERT INTO market_reports (title, content) VALUES ($1, $2) RETURNING id`,
-      [`Relatório Semanal — ${new Date().toLocaleDateString('pt-BR')}`, content]
+      `INSERT INTO market_reports (title, content, created_by) VALUES ($1, $2, $3) RETURNING id`,
+      [`Relatório Semanal — ${new Date().toLocaleDateString('pt-BR')}`, content, adminId]
     );
 
     const summary = content.slice(0, 800) + (content.length > 800 ? '...\n\n[Relatório completo salvo no sistema]' : '');
