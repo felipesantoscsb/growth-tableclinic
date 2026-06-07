@@ -229,10 +229,24 @@ function buildSilenceRemoveFilter(silences, duration) {
   return { filter, speechSegments };
 }
 
+// Verifica se o arquivo tem ao menos uma faixa de áudio (via ffprobe)
+function hasAudioStream(inputPath) {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(inputPath, (err, meta) => {
+      if (err || !meta || !Array.isArray(meta.streams)) return resolve(false);
+      resolve(meta.streams.some(s => s.codec_type === 'audio'));
+    });
+  });
+}
+
 // Transcreve o áudio do vídeo e gera um arquivo .srt (OpenAI Whisper)
 async function transcribeToSrt(videoPath, sessionDir) {
   const openai = getOpenAI();
   if (!openai) throw new Error('Legendas exigem OPENAI_API_KEY configurada no ambiente');
+
+  // Sem áudio não há o que transcrever — erro claro em vez do críptico do ffmpeg
+  if (!(await hasAudioStream(videoPath)))
+    throw new Error('o vídeo não tem faixa de áudio para transcrever');
 
   // Extrai só o áudio (mp3 leve) para acelerar o upload
   const audioPath = path.join(sessionDir, 'audio.mp3');
@@ -321,17 +335,33 @@ function runMainPass(inputPath, ops, duration, outPath) {
   });
 }
 
-// Queima as legendas (.srt) no vídeo
-function burnSubtitles(inputPath, srtPath, outPath) {
+// Queima as legendas (.srt) no vídeo. Se muteAudio, remove o áudio aqui
+// (usado quando o usuário pediu mudo + legendas: o áudio foi preservado só
+// para a transcrição e agora é descartado).
+function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) {
   return new Promise((resolve, reject) => {
     // Escapa o caminho para o filtro subtitles do ffmpeg
     const escaped = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-    const style = "force_style='Fontname=DejaVu Sans,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=50'";
+    // Fontname precisa existir na imagem — o Dockerfile instala fonts-liberation
+    const style = "force_style='Fontname=Liberation Sans,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=50'";
+    const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
     ffmpeg(inputPath)
       .videoFilters(`subtitles='${escaped}':${style}`)
-      .outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a copy', '-movflags +faststart', '-pix_fmt yuv420p'])
+      .outputOptions(['-c:v libx264', '-preset fast', '-crf 23', ...audioOpts, '-movflags +faststart', '-pix_fmt yuv420p'])
       .output(outPath)
       .on('start', () => console.log('[FFmpeg] Queimando legendas...'))
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+// Remove a faixa de áudio sem reencodar o vídeo (rápido)
+function stripAudio(inputPath, outPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .outputOptions(['-c:v copy', '-an', '-movflags +faststart'])
+      .output(outPath)
       .on('end', resolve)
       .on('error', reject)
       .run();
@@ -378,18 +408,29 @@ async function editVideo({ video_url, instructions, cardId }) {
 
   // Passo 2: filtros principais (se legendas, vai para arquivo intermediário)
   const mainOut = ops.subtitles ? path.join(sessionDir, 'stage_main.mp4') : outputPath;
-  await runMainPass(workingInput, ops, duration, mainOut);
+
+  // Legendas (Whisper) precisam do áudio para transcrever. Se o usuário pediu
+  // mudo + legendas, adiamos a remoção do áudio para depois da transcrição —
+  // senão o passo principal removeria o áudio e a transcrição falharia
+  // ("Output file does not contain any stream"). O mute é aplicado ao queimar
+  // as legendas (ou no fallback abaixo).
+  const deferMute = ops.mute && ops.subtitles;
+  const mainOps = deferMute ? { ...ops, mute: false } : ops;
+  await runMainPass(workingInput, mainOps, duration, mainOut);
 
   // Passo 3 (opcional, best-effort): legendas via Whisper
   if (ops.subtitles) {
     try {
       console.log('[FFmpeg] Transcrevendo áudio para legendas...');
       const srtPath = await transcribeToSrt(mainOut, sessionDir);
-      await burnSubtitles(mainOut, srtPath, outputPath);
+      await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
     } catch (e) {
       console.error('[FFmpeg] Falha ao gerar legendas:', e.message);
-      // Não derruba a edição inteira — entrega o vídeo sem legenda e avisa
-      fs.copyFileSync(mainOut, outputPath);
+      // Não derruba a edição inteira — entrega o vídeo sem legenda e avisa.
+      // Se o mute foi adiado, mainOut ainda tem áudio: removemos agora para
+      // respeitar o pedido de mudo do usuário.
+      if (deferMute) await stripAudio(mainOut, outputPath);
+      else fs.copyFileSync(mainOut, outputPath);
       ops.subtitles = false;
       ops.subtitles_warning = e.message;
     }
