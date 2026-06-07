@@ -25,11 +25,24 @@ async function downloadFromDrive(url, destPath) {
   const fileId = extractDriveFileId(url);
   if (!fileId) throw new Error('Não foi possível extrair o file ID da URL do Google Drive');
 
-  const keyPath = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!keyPath) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON não configurado no .env');
+  // Suporta duas formas de credencial:
+  // 1. GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT — conteúdo do JSON (Railway, Heroku, etc.)
+  // 2. GOOGLE_SERVICE_ACCOUNT_JSON — caminho para o arquivo (local/VPS)
+  let credentials;
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT) {
+    try {
+      credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    } catch {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT contém JSON inválido');
+    }
+  } else if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    credentials = JSON.parse(fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_JSON, 'utf8'));
+  } else {
+    throw new Error('Configure GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT (Railway) ou GOOGLE_SERVICE_ACCOUNT_JSON (local)');
+  }
 
   const auth = new google.auth.GoogleAuth({
-    keyFile: keyPath,
+    credentials,
     scopes: ['https://www.googleapis.com/auth/drive.readonly'],
   });
 
