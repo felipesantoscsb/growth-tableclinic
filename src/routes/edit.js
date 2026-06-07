@@ -1,40 +1,45 @@
 const router = require('express').Router();
+const path = require('path');
+const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
-const OpenAI = require('openai');
+const { editVideo } = require('../services/videoEditor');
 
 router.use(authMiddleware);
 
+// POST /api/edit/video — edição real via FFmpeg
 router.post('/video', async (req, res) => {
   try {
-    const { video_url, instructions } = req.body;
+    const { video_url, instructions, card_id } = req.body;
     if (!video_url || !instructions) return fail(res, 'video_url e instructions obrigatórios', 400);
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    // OpenAI não tem endpoint direto de edição de vídeo por URL ainda;
-    // Retornamos análise/roteiro de edição via GPT-4o como proxy útil
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: 'Você é um editor de vídeo especialista em conteúdo para Instagram. Analise as instruções e forneça um roteiro detalhado de edição com timecodes, cortes, legendas e efeitos recomendados.',
-        },
-        {
-          role: 'user',
-          content: `Vídeo: ${video_url}\n\nInstruções de edição: ${instructions}\n\nGere um roteiro completo de edição com:\n1. Lista de cortes com timecodes\n2. Legendas sugeridas por trecho\n3. Efeitos e transições recomendados\n4. Música de fundo sugerida\n5. Checklist de exportação (formato, resolução, fps)`,
-        },
-      ],
-    });
+    const result = await editVideo({ video_url, instructions, cardId: card_id || req.user.id });
 
     ok(res, {
-      video_url,
-      instructions,
-      edit_plan: completion.choices[0].message.content,
-      note: 'Plano de edição gerado. Para edição automatizada de vídeo, integre com ferramentas como Remotion ou FFmpeg conforme o roteiro acima.',
+      duration_original: result.duration_original,
+      duration_output: result.duration_output,
+      size_mb: result.size_mb,
+      ops_applied: result.ops_applied,
+      download_url: `/api/edit/download/${path.basename(result.sessionDir)}`,
     });
-  } catch (e) { fail(res, e.message); }
+  } catch (e) {
+    console.error('[edit/video]', e.message);
+    fail(res, e.message);
+  }
+});
+
+// GET /api/edit/download/:sessionId — serve o vídeo editado para download
+router.get('/download/:sessionId', (req, res) => {
+  // Valida que o sessionId não tenta path traversal
+  const sessionId = req.params.sessionId;
+  if (!/^video_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
+
+  const outputPath = path.join(__dirname, '../../tmp', sessionId, 'output.mp4');
+  if (!fs.existsSync(outputPath)) return fail(res, 'Arquivo não encontrado ou expirado', 404);
+
+  res.setHeader('Content-Disposition', `attachment; filename="tableclinic_${sessionId}.mp4"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  fs.createReadStream(outputPath).pipe(res);
 });
 
 module.exports = router;

@@ -1,7 +1,10 @@
 const router = require('express').Router();
+const path = require('path');
+const fs = require('fs');
 const db = require('../models/db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
+const { generateCarousel, cleanTmp } = require('../services/carousel');
 
 router.use(authMiddleware);
 
@@ -161,6 +164,48 @@ router.delete('/:id', async (req, res) => {
     await db.query('UPDATE content_cards SET archived=true, updated_at=NOW() WHERE id=$1', [req.params.id]);
     ok(res, { archived: true });
   } catch (e) { fail(res, e.message); }
+});
+
+// POST /api/cards/:id/carousel — gera slides PNG do carrossel via Puppeteer
+router.post('/:id/carousel', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM content_cards WHERE id=$1 AND archived=false', [req.params.id]);
+    const card = rows[0];
+    if (!card) return fail(res, 'Card não encontrado', 404);
+    if (req.user.role === 'nutri' && card.responsible_id !== req.user.id)
+      return fail(res, 'Acesso negado', 403);
+    if (!['carrossel', 'carrossel_video'].includes(card.format))
+      return fail(res, 'Este card não é um carrossel', 400);
+    if (!card.content) return fail(res, 'Card sem conteúdo — gere o roteiro primeiro', 400);
+
+    cleanTmp(); // limpa sessões antigas antes de criar nova
+
+    const result = await generateCarousel(card.content, card.id);
+
+    ok(res, {
+      slides: result.slides,
+      download_url: `/api/cards/carousel-download/${path.basename(result.sessionDir)}`,
+      message: `${result.slides} slides gerados`,
+    });
+  } catch (e) {
+    console.error('[carousel]', e.message);
+    fail(res, e.message);
+  }
+});
+
+// GET /api/cards/carousel-download/:sessionId — serve o ZIP para download
+router.get('/carousel-download/:sessionId', (req, res) => {
+  const sessionId = req.params.sessionId;
+  if (!/^carousel_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
+
+  const dir = path.join(__dirname, '../../tmp', sessionId);
+  const zipFile = fs.readdirSync(dir).find(f => f.endsWith('.zip'));
+  if (!zipFile) return fail(res, 'ZIP não encontrado ou expirado', 404);
+
+  const zipPath = path.join(dir, zipFile);
+  res.setHeader('Content-Disposition', `attachment; filename="${zipFile}"`);
+  res.setHeader('Content-Type', 'application/zip');
+  fs.createReadStream(zipPath).pipe(res);
 });
 
 module.exports = router;
