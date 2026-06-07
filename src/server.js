@@ -165,5 +165,7 @@ async function bootstrap() {
 
 bootstrap().catch(err => {
   console.error('[bootstrap] Erro fatal:', err.message);
+  console.error('[bootstrap] Stack:', err.stack);
+  console.error('[bootstrap] DATABASE_URL definida?', !!process.env.DATABASE_URL);
   process.exit(1);
 });
