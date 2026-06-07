@@ -6,7 +6,20 @@ const client = new Anthropic({
   timeout: 45_000,
   maxRetries: 2,
 });
-const MODEL = 'claude-sonnet-4-6';
+// Configurável por env (CLAUDE_MODEL) — permite trocar de modelo sem redeploy de código
+const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+
+// Extrai texto da resposta de forma robusta (ignora blocos não-texto, ex: thinking/tool_use)
+function extractText(msg) {
+  if (!msg || !Array.isArray(msg.content)) return '';
+  const text = msg.content
+    .filter(b => b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text)
+    .join('\n')
+    .trim();
+  if (!text) throw new Error('A IA não retornou texto — tente novamente');
+  return text;
+}
 
 const VOICE_EVELYN = `Você é a Evelyn, nutricionista comportamental. Sua voz é:
 - Feminina, acolhedora, introspectiva
@@ -86,7 +99,7 @@ async function generateContent({ format, pilar, briefing, user_role, nutri_name 
     messages: [{ role: 'user', content: userPrompt }],
   });
 
-  return msg.content[0].text;
+  return extractText(msg);
 }
 
 async function generateAds({ objective, product, audience }) {
@@ -113,7 +126,7 @@ Use a voz acolhedora e comportamental da Evelyn. Nunca prometa resultados físic
     }],
   });
 
-  return msg.content[0].text;
+  return extractText(msg);
 }
 
 async function generateRepurpose({ transcricao }) {
@@ -145,7 +158,7 @@ Uma variação de copy de anúncio baseada no tema do conteúdo.`,
     }],
   });
 
-  return msg.content[0].text;
+  return extractText(msg);
 }
 
 async function generateMarketResearch({ tema }) {
@@ -167,7 +180,7 @@ Forneça:
     }],
   });
 
-  return msg.content[0].text;
+  return extractText(msg);
 }
 
 async function analyzeInsights({ campaignData }) {
@@ -189,7 +202,7 @@ Forneça:
     }],
   });
 
-  return msg.content[0].text;
+  return extractText(msg);
 }
 
 module.exports = { generateContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights };

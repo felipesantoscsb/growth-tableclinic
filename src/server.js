@@ -13,7 +13,13 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
-const generalLimiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true });
+const generalLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  // fix: mensagem em JSON para o frontend conseguir parsear (res.json no client)
+  message: { success: false, error: 'Muitas requisições — aguarde um momento' },
+});
 app.use('/api', generalLimiter);
 
 // fix: rate limit restrito para operações pesadas (Puppeteer + FFmpeg)
@@ -38,6 +44,16 @@ const heavyLimiter = rateLimit({
   message: { success: false, error: 'Muitas requisições pesadas — aguarde 1 minuto' },
 });
 
+// fix crítico: o heavy limiter PRECISA ser registrado ANTES dos route handlers,
+// senão o router responde primeiro e o limiter nunca executa (era dead code).
+app.use('/api/cards/carousel-direct', heavyLimiter);
+app.use('/api/cards/:id/carousel', heavyLimiter);
+app.use('/api/edit/video', heavyLimiter);
+app.use('/api/generate/content', heavyLimiter);
+app.use('/api/generate/ads', heavyLimiter);
+app.use('/api/generate/repurpose', heavyLimiter);
+app.use('/api/market/research', heavyLimiter);
+
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/cards', require('./routes/cards'));
@@ -47,14 +63,6 @@ app.use('/api/market', require('./routes/market'));
 app.use('/api/insights', require('./routes/insights'));
 app.use('/api/edit', require('./routes/edit'));
 app.use('/api/users', require('./routes/users'));
-
-// Aplica heavy limiter sobre as rotas que disparam Puppeteer ou FFmpeg
-app.use('/api/cards/:id/carousel', heavyLimiter);
-app.use('/api/edit/video', heavyLimiter);
-app.use('/api/generate/content', heavyLimiter);
-app.use('/api/generate/ads', heavyLimiter);
-app.use('/api/generate/repurpose', heavyLimiter);
-app.use('/api/market/research', heavyLimiter);
 
 // SPA fallback — serve index.html for all non-API routes
 app.get(/^(?!\/api).*/, (req, res) => {

@@ -5,7 +5,12 @@ const jwt = require('jsonwebtoken');
 const db = require('../models/db');
 const { ok, fail } = require('../middleware/respond');
 
-const limiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true });
+const limiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  message: { success: false, error: 'Muitas tentativas de login — aguarde 1 minuto' },
+});
 
 router.post('/login', limiter, async (req, res) => {
   const { email, password } = req.body;

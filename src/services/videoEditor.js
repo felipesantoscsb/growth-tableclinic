@@ -1,5 +1,4 @@
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const path = require('path');
 const fs = require('fs');
 const dns = require('dns').promises;
@@ -7,7 +6,28 @@ const https = require('https');
 const http = require('http');
 const { isDriveUrl, downloadFromDrive } = require('./driveDownloader');
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+// fix: prefere binários do sistema (o Dockerfile instala ffmpeg/ffprobe com libass,
+// necessário para os filtros `subtitles` e `silencedetect`). Cai para o pacote npm
+// localmente. Sobrescrevível via FFMPEG_PATH / FFPROBE_PATH.
+function resolveBin(name, installerModule) {
+  const envVar = process.env[`${name.toUpperCase()}_PATH`];
+  if (envVar) return envVar;
+  const sysPath = `/usr/bin/${name}`;
+  if (fs.existsSync(sysPath)) return sysPath;
+  try { return require(installerModule).path; } catch { return name; }
+}
+ffmpeg.setFfmpegPath(resolveBin('ffmpeg', '@ffmpeg-installer/ffmpeg'));
+ffmpeg.setFfprobePath(resolveBin('ffprobe', '@ffprobe-installer/ffprobe'));
+
+// Cliente OpenAI (Whisper) para transcrição de legendas — carregado sob demanda
+let _openai = null;
+function getOpenAI() {
+  if (_openai) return _openai;
+  if (!process.env.OPENAI_API_KEY) return null;
+  const OpenAI = require('openai');
+  _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _openai;
+}
 
 const TMP_DIR = path.join(__dirname, '../../tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -209,6 +229,115 @@ function buildSilenceRemoveFilter(silences, duration) {
   return { filter, speechSegments };
 }
 
+// Transcreve o áudio do vídeo e gera um arquivo .srt (OpenAI Whisper)
+async function transcribeToSrt(videoPath, sessionDir) {
+  const openai = getOpenAI();
+  if (!openai) throw new Error('Legendas exigem OPENAI_API_KEY configurada no ambiente');
+
+  // Extrai só o áudio (mp3 leve) para acelerar o upload
+  const audioPath = path.join(sessionDir, 'audio.mp3');
+  await new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .noVideo()
+      .audioCodec('libmp3lame')
+      .audioBitrate('128k')
+      .output(audioPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+
+  const srt = await openai.audio.transcriptions.create({
+    file: fs.createReadStream(audioPath),
+    model: process.env.WHISPER_MODEL || 'whisper-1',
+    response_format: 'srt',
+    language: 'pt',
+  });
+
+  const srtPath = path.join(sessionDir, 'subs.srt');
+  fs.writeFileSync(srtPath, typeof srt === 'string' ? srt : String(srt));
+  return srtPath;
+}
+
+// Passo de remoção de silêncios (trim+concat) → arquivo intermediário
+function runSilenceRemoval(inputPath, silenceFilter, outPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .complexFilter(silenceFilter.filter)
+      .outputOptions([
+        '-map [vout]', '-map [aout]',
+        '-c:v libx264', '-preset fast', '-crf 23',
+        '-c:a aac', '-b:a 128k',
+        '-movflags +faststart', '-pix_fmt yuv420p',
+      ])
+      .output(outPath)
+      .on('start', () => console.log('[FFmpeg] Removendo silêncios...'))
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+// Passo principal: resize, velocidade, grayscale, volume, mute, trim
+function runMainPass(inputPath, ops, duration, outPath) {
+  return new Promise((resolve, reject) => {
+    let cmd = ffmpeg(inputPath);
+
+    if (ops.trim) {
+      cmd = cmd.setStartTime(ops.trim.start);
+      if (ops.trim.end < duration) cmd = cmd.setDuration(ops.trim.end - ops.trim.start);
+    }
+
+    const vFilters = [];
+    if (ops.resize === '9:16') vFilters.push('crop=ih*9/16:ih,scale=1080:1920');
+    else if (ops.resize === '1:1') vFilters.push('crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080');
+    else if (ops.resize === '16:9') vFilters.push('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2');
+    if (ops.speed && ops.speed !== 1.0) vFilters.push(`setpts=${(1 / ops.speed).toFixed(4)}*PTS`);
+    if (ops.grayscale) vFilters.push('hue=s=0');
+    if (vFilters.length > 0) cmd = cmd.videoFilters(vFilters);
+
+    if (ops.mute) {
+      cmd = cmd.noAudio();
+    } else {
+      const aFilters = [];
+      if (ops.speed && ops.speed !== 1.0) {
+        const s = ops.speed;
+        if (s > 2.0) aFilters.push('atempo=2.0', `atempo=${(s / 2.0).toFixed(4)}`);
+        else if (s < 0.5) aFilters.push('atempo=0.5', `atempo=${(s / 0.5).toFixed(4)}`);
+        else aFilters.push(`atempo=${s.toFixed(4)}`);
+      }
+      if (ops.volume !== null) aFilters.push(`volume=${ops.volume}`);
+      if (aFilters.length > 0) cmd = cmd.audioFilters(aFilters);
+    }
+
+    cmd
+      .outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a aac', '-b:a 128k', '-movflags +faststart', '-pix_fmt yuv420p'])
+      .output(outPath)
+      .on('start', c => console.log('[FFmpeg] Iniciando passo principal:', c))
+      .on('progress', p => console.log(`[FFmpeg] ${Math.round(p.percent || 0)}%`))
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+// Queima as legendas (.srt) no vídeo
+function burnSubtitles(inputPath, srtPath, outPath) {
+  return new Promise((resolve, reject) => {
+    // Escapa o caminho para o filtro subtitles do ffmpeg
+    const escaped = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    const style = "force_style='Fontname=DejaVu Sans,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=50'";
+    ffmpeg(inputPath)
+      .videoFilters(`subtitles='${escaped}':${style}`)
+      .outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a copy', '-movflags +faststart', '-pix_fmt yuv420p'])
+      .output(outPath)
+      .on('start', () => console.log('[FFmpeg] Queimando legendas...'))
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
 async function editVideo({ video_url, instructions, cardId }) {
   const sessionId = `video_${cardId || 'tmp'}_${Date.now()}`;
   const sessionDir = path.join(TMP_DIR, sessionId);
@@ -224,85 +353,54 @@ async function editVideo({ video_url, instructions, cardId }) {
     await downloadFile(video_url, inputPath);
   }
 
-  const duration = await getVideoDuration(inputPath);
+  const originalDuration = await getVideoDuration(inputPath);
+  let duration = originalDuration;
   const ops = parseInstructions(instructions, duration);
   const outputPath = path.join(sessionDir, 'output.mp4');
 
-  // Detecta silêncios antes do ffmpeg principal se necessário
-  let silenceFilter = null;
+  // Passo 1 (opcional): remoção de silêncios → intermediário
+  let workingInput = inputPath;
   if (ops.removeSilence) {
     console.log('[FFmpeg] Detectando silêncios...');
     const silences = await detectSilenceSegments(inputPath);
-    if (silences.length > 0) {
-      silenceFilter = buildSilenceRemoveFilter(silences, duration);
-      console.log(`[FFmpeg] ${silences.length} silêncio(s) detectado(s), ${silenceFilter?.speechSegments?.length} segmentos de fala`);
+    const silenceFilter = silences.length ? buildSilenceRemoveFilter(silences, duration) : null;
+    if (silenceFilter) {
+      console.log(`[FFmpeg] ${silences.length} silêncio(s), ${silenceFilter.speechSegments.length} segmento(s) de fala`);
+      const noSilencePath = path.join(sessionDir, 'nosilence.mp4');
+      await runSilenceRemoval(inputPath, silenceFilter, noSilencePath);
+      workingInput = noSilencePath;
+      duration = await getVideoDuration(noSilencePath);
+    } else {
+      console.log('[FFmpeg] Nenhum silêncio relevante detectado');
+      ops.removeSilence = false;
     }
   }
 
-  await new Promise((resolve, reject) => {
-    let cmd = ffmpeg(inputPath);
+  // Passo 2: filtros principais (se legendas, vai para arquivo intermediário)
+  const mainOut = ops.subtitles ? path.join(sessionDir, 'stage_main.mp4') : outputPath;
+  await runMainPass(workingInput, ops, duration, mainOut);
 
-    // Se removeSilence, usa filtergraph complexo (ignora trim simples para não conflitar)
-    if (silenceFilter) {
-      cmd = cmd
-        .complexFilter(silenceFilter.filter)
-        .outputOptions([
-          '-map [vout]', '-map [aout]',
-          '-c:v libx264', '-preset fast', '-crf 23',
-          '-c:a aac', '-b:a 128k',
-          '-movflags +faststart', '-pix_fmt yuv420p',
-        ]);
-    } else {
-      if (ops.trim) {
-        cmd = cmd.setStartTime(ops.trim.start);
-        if (ops.trim.end < duration) cmd = cmd.setDuration(ops.trim.end - ops.trim.start);
-      }
-
-      const vFilters = [];
-      if (ops.resize === '9:16') {
-        vFilters.push('crop=ih*9/16:ih,scale=1080:1920');
-      } else if (ops.resize === '1:1') {
-        vFilters.push('crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080');
-      } else if (ops.resize === '16:9') {
-        vFilters.push('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2');
-      }
-
-      if (ops.speed && ops.speed !== 1.0) vFilters.push(`setpts=${(1 / ops.speed).toFixed(4)}*PTS`);
-      if (ops.grayscale) vFilters.push('hue=s=0');
-      if (vFilters.length > 0) cmd = cmd.videoFilters(vFilters);
-
-      if (ops.mute) {
-        cmd = cmd.noAudio();
-      } else {
-        const aFilters = [];
-        if (ops.speed && ops.speed !== 1.0) {
-          const s = ops.speed;
-          if (s > 2.0) aFilters.push('atempo=2.0', `atempo=${(s / 2.0).toFixed(4)}`);
-          else if (s < 0.5) aFilters.push('atempo=0.5', `atempo=${(s / 0.5).toFixed(4)}`);
-          else aFilters.push(`atempo=${s.toFixed(4)}`);
-        }
-        if (ops.volume !== null) aFilters.push(`volume=${ops.volume}`);
-        if (aFilters.length > 0) cmd = cmd.audioFilters(aFilters);
-      }
-
-      cmd.outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a aac', '-b:a 128k', '-movflags +faststart', '-pix_fmt yuv420p']);
+  // Passo 3 (opcional, best-effort): legendas via Whisper
+  if (ops.subtitles) {
+    try {
+      console.log('[FFmpeg] Transcrevendo áudio para legendas...');
+      const srtPath = await transcribeToSrt(mainOut, sessionDir);
+      await burnSubtitles(mainOut, srtPath, outputPath);
+    } catch (e) {
+      console.error('[FFmpeg] Falha ao gerar legendas:', e.message);
+      // Não derruba a edição inteira — entrega o vídeo sem legenda e avisa
+      fs.copyFileSync(mainOut, outputPath);
+      ops.subtitles = false;
+      ops.subtitles_warning = e.message;
     }
-
-    cmd
-      .output(outputPath)
-      .on('start', c => console.log('[FFmpeg] Iniciando:', c))
-      .on('progress', p => console.log(`[FFmpeg] ${Math.round(p.percent || 0)}%`))
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
-  });
+  }
 
   const finalDuration = await getVideoDuration(outputPath);
   const stat = fs.statSync(outputPath);
   return {
     outputPath,
     sessionDir,
-    duration_original: Math.round(duration),
+    duration_original: Math.round(originalDuration),
     duration_output: Math.round(finalDuration),
     size_mb: (stat.size / 1_048_576).toFixed(2),
     ops_applied: ops,

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Table Growth Hub — Plataforma de conteúdo inteligente para TableClinic",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",

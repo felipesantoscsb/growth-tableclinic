@@ -1,7 +1,8 @@
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
-const archiver = require('archiver');
+// archiver v8 mudou a API: exporta classes nomeadas em vez da função-fábrica
+const { ZipArchive } = require('archiver');
 const { downloadFolderImages } = require('./driveDownloader');
 
 const TMP_DIR = path.join(__dirname, '../../tmp');
@@ -233,10 +234,15 @@ async function generateCarousel(rawContent, cardId, driveFolderUrl) {
       // Distribui fotos pelos slides (uma por slide, ciclando se necessário)
       const photo = photos.length > 0 ? photos[i % photos.length] : null;
       const html = buildSlideHtml(slides[i], i, slides.length, photo);
-      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15_000 });
-
-      // Aguarda fontes do Google carregarem
-      await page.evaluateHandle('document.fonts.ready');
+      // fix: não usar networkidle0 — se o CDN de fontes travar, a geração inteira falha.
+      // Renderiza assim que o DOM carrega e espera as fontes no máximo 3s (fallback seguro).
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      await page.evaluate(() =>
+        Promise.race([
+          document.fonts.ready,
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ])
+      );
 
       const imgPath = path.join(sessionDir, `slide_${String(i + 1).padStart(2, '0')}.png`);
       await page.screenshot({ path: imgPath, type: 'png', clip: { x:0, y:0, width:1080, height:1080 } });
@@ -250,7 +256,7 @@ async function generateCarousel(rawContent, cardId, driveFolderUrl) {
   const zipPath = path.join(sessionDir, `carrossel_${cardId}.zip`);
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
-    const archive = archiver('zip', { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
     output.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(output);

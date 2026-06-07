@@ -758,15 +758,15 @@ async function edicao(el) {
         </div>
         <div class="form-group">
           <label>Instruções em linguagem natural</label>
-          <textarea id="video-instructions" rows="5" placeholder="Ex: Remover os primeiros 20s, converter para 9:16, reduzir volume para 50%, exportar em MP4"></textarea>
+          <textarea id="video-instructions" rows="5" placeholder="Ex: Remover pausas e silêncios, adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
         </div>
         <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
       </div>
 
       <div class="card" style="background:var(--bege);border:none;box-shadow:none;padding:14px 18px">
         <p style="font-size:.82rem;color:var(--muted);line-height:1.6">
-          <strong>Operações suportadas:</strong> corte (trim) · resize 9:16 / 1:1 / 16:9 ·
-          ajuste de velocidade (0.5×–2×) · redução de volume · mudo · preto&amp;branco<br>
+          <strong>Operações suportadas:</strong> corte (trim) · remover pausas/silêncios · legendas automáticas ·
+          resize 9:16 / 1:1 / 16:9 · ajuste de velocidade (0.5×–2×) · redução de volume · mudo · preto&amp;branco<br>
           <strong>Formatos de entrada:</strong> MP4, MOV, WebM, AVI, MKV (via URL pública direta)
         </p>
       </div>
@@ -797,6 +797,7 @@ async function edicao(el) {
         ops.grayscale ? `🎞 Preto e branco` : null,
         ops.removeSilence ? `✂️ Pausas removidas` : null,
         ops.subtitles ? `💬 Legendas (burned-in)` : null,
+        ops.subtitles_warning ? `⚠️ Legendas não aplicadas: ${ops.subtitles_warning}` : null,
       ].filter(Boolean);
 
       result.innerHTML = `
