@@ -349,12 +349,16 @@ function openCardDetail(card) {
     </p>
     ${card.drive_link ? `<p style="margin-bottom:12px"><a href="${card.drive_link}" target="_blank" style="color:var(--terracota)">🔗 Drive</a></p>` : ''}
     ${card.content ? `<div class="ai-output">${safeHtml(card.content)}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
-    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-      <select id="status-select" class="form-group" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
+    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center">
+      <select id="status-select" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
         ${['ideia','roteiro','gravado','edicao','programado','publicado'].map(s=>`<option value="${s}"${s===card.status?' selected':''}>${s}</option>`).join('')}
       </select>
       <button class="btn btn-primary btn-sm" id="save-status">Atualizar status</button>
+      ${['carrossel','carrossel_video'].includes(card.format) && card.content
+        ? `<button class="btn btn-accent btn-sm" id="gen-carousel-btn">🎨 Gerar slides PNG</button>`
+        : ''}
     </div>
+    <div id="carousel-result" style="margin-top:12px"></div>
   `);
 
   overlay.querySelector('#save-status').addEventListener('click', async () => {
@@ -364,6 +368,30 @@ function openCardDetail(card) {
       toast('Status atualizado');
       overlay.remove();
     } catch (e) { toast(e.message, 'error'); }
+  });
+
+  overlay.querySelector('#gen-carousel-btn')?.addEventListener('click', async () => {
+    const btn = overlay.querySelector('#gen-carousel-btn');
+    const resultEl = overlay.querySelector('#carousel-result');
+    btn.disabled = true;
+    btn.textContent = '⏳ Gerando slides...';
+    resultEl.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
+    try {
+      const data = await api('POST', `/cards/${card.id}/carousel`);
+      resultEl.innerHTML = `
+        <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+          <a href="${data.download_url}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+        </div>
+      `;
+      toast(`${data.slides} slides prontos!`);
+    } catch (e) {
+      resultEl.innerHTML = `<p style="color:#c0392b;font-size:.85rem">Erro: ${safeHtml(e.message)}</p>`;
+      toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🎨 Gerar slides PNG';
+    }
   });
 }
 
@@ -598,18 +626,27 @@ async function repurposing(el) {
 async function edicao(el) {
   el.innerHTML = `
     <div class="page-header"><h1>Edição de Vídeo</h1></div>
-    <div style="max-width:680px">
-      <div class="card">
+    <div style="max-width:720px">
+      <div class="card" style="margin-bottom:16px">
         <div class="form-group">
-          <label>URL do vídeo (Drive, YouTube, S3...)</label>
-          <input id="video-url" placeholder="https://drive.google.com/file/...">
+          <label>URL do vídeo (link direto para download — MP4, MOV, WebM)</label>
+          <input id="video-url" placeholder="https://seu-bucket.s3.amazonaws.com/video.mp4">
         </div>
         <div class="form-group">
-          <label>Instruções de edição</label>
-          <textarea id="video-instructions" rows="6" placeholder="Ex: Cortar os primeiros 30s, adicionar legendas automáticas em branco, colocar intro com logo, música de fundo calma, exportar 9:16 1080p..."></textarea>
+          <label>Instruções em linguagem natural</label>
+          <textarea id="video-instructions" rows="5" placeholder="Ex: Remover os primeiros 20s, converter para 9:16, reduzir volume para 50%, exportar em MP4"></textarea>
         </div>
-        <button class="btn btn-accent" id="edit-btn">🎬 Gerar Plano de Edição</button>
+        <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
       </div>
+
+      <div class="card" style="background:var(--bege);border:none;box-shadow:none;padding:14px 18px">
+        <p style="font-size:.82rem;color:var(--muted);line-height:1.6">
+          <strong>Operações suportadas:</strong> corte (trim) · resize 9:16 / 1:1 / 16:9 ·
+          ajuste de velocidade (0.5×–2×) · redução de volume · mudo · preto&amp;branco<br>
+          <strong>Formatos de entrada:</strong> MP4, MOV, WebM, AVI, MKV (via URL pública direta)
+        </p>
+      </div>
+
       <div id="edit-result" style="margin-top:20px"></div>
     </div>
   `;
@@ -621,23 +658,53 @@ async function edicao(el) {
     const btn = el.querySelector('#edit-btn');
     btn.disabled = true; btn.textContent = '⏳ Processando...';
     const result = document.getElementById('edit-result');
-    result.innerHTML = '<div class="loading"><div class="spinner"></div> Gerando plano de edição...</div>';
+    result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo com FFmpeg… pode levar alguns segundos.</div>';
 
     try {
       const data = await api('POST', '/edit/video', { video_url, instructions });
+
+      // Ops aplicadas em formato legível
+      const ops = data.ops_applied || {};
+      const opsList = [
+        ops.trim    ? `✂️ Corte: ${ops.trim.start}s → ${ops.trim.end}s` : null,
+        ops.resize  ? `📐 Resize: ${ops.resize}` : null,
+        ops.speed   ? `⏩ Velocidade: ${ops.speed}×` : null,
+        ops.mute    ? `🔇 Áudio removido` : ops.volume !== null ? `🔊 Volume: ${Math.round(ops.volume * 100)}%` : null,
+        ops.grayscale ? `🎞 Preto e branco` : null,
+      ].filter(Boolean);
+
       result.innerHTML = `
         <div class="card">
-          <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Plano de Edição</h3>
-          <div class="ai-output">${safeHtml(data.edit_plan)}</div>
-          ${data.note ? `<p style="font-size:.8rem;color:var(--muted);margin-top:10px;font-style:italic">${data.note}</p>` : ''}
+          <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:16px">Vídeo editado</h3>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
+              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.duration_original}s</div>
+              <div style="font-size:.75rem;color:var(--muted)">duração original</div>
+            </div>
+            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
+              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.duration_output}s</div>
+              <div style="font-size:.75rem;color:var(--muted)">duração final</div>
+            </div>
+            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
+              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.size_mb} MB</div>
+              <div style="font-size:.75rem;color:var(--muted)">tamanho final</div>
+            </div>
+          </div>
+          ${opsList.length ? `
+            <div style="margin-bottom:16px">
+              <p style="font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Operações aplicadas</p>
+              ${opsList.map(o=>`<div style="font-size:.88rem;padding:5px 0;border-bottom:1px solid var(--bege-dark)">${o}</div>`).join('')}
+            </div>
+          ` : ''}
+          <a href="${data.download_url}" download class="btn btn-accent btn-full">⬇ Baixar vídeo editado (MP4)</a>
         </div>
       `;
-      toast('Plano gerado!');
+      toast('Vídeo editado com sucesso!');
     } catch (err) {
-      result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
+      result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${safeHtml(err.message)}</p></div>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '🎬 Gerar Plano de Edição';
+      btn.disabled = false; btn.textContent = '🎬 Editar vídeo';
     }
   });
 }
