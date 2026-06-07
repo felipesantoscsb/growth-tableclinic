@@ -1,3 +1,15 @@
+// ── fix #1: escape HTML para evitar XSS com conteúdo gerado por IA ──
+function safeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\n/g, '<br>');
+}
+
 // ── State ──────────────────────────────────────────────
 const state = {
   token: localStorage.getItem('token'),
@@ -336,7 +348,7 @@ function openCardDetail(card) {
       Responsável: ${card.responsible_name || '—'} · Publicação: ${formatDate(card.publish_date)}
     </p>
     ${card.drive_link ? `<p style="margin-bottom:12px"><a href="${card.drive_link}" target="_blank" style="color:var(--terracota)">🔗 Drive</a></p>` : ''}
-    ${card.content ? `<div class="ai-output">${card.content}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
+    ${card.content ? `<div class="ai-output">${safeHtml(card.content)}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <select id="status-select" class="form-group" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
         ${['ideia','roteiro','gravado','edicao','programado','publicado'].map(s=>`<option value="${s}"${s===card.status?' selected':''}>${s}</option>`).join('')}
@@ -447,7 +459,7 @@ async function gerador(el) {
             <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">Conteúdo gerado</h3>
             <span class="badge" style="background:#f0e8ff;color:#5a2d9a">✨ IA · salvo como roteiro</span>
           </div>
-          <div class="ai-output">${card.content || '(sem conteúdo)'}</div>
+          <div class="ai-output">${safeHtml(card.content) || '(sem conteúdo)'}</div>
           <p style="color:var(--muted);font-size:.8rem;margin-top:10px">Card #${card.id} salvo no calendário como rascunho.</p>
         </div>
       `;
@@ -569,7 +581,7 @@ async function repurposing(el) {
       result.innerHTML = `
         <div class="card">
           <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:16px">Outputs gerados</h3>
-          <div class="ai-output">${data.result}</div>
+          <div class="ai-output">${safeHtml(data.result)}</div>
         </div>
       `;
       toast('Repurposing gerado!');
@@ -616,7 +628,7 @@ async function edicao(el) {
       result.innerHTML = `
         <div class="card">
           <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Plano de Edição</h3>
-          <div class="ai-output">${data.edit_plan}</div>
+          <div class="ai-output">${safeHtml(data.edit_plan)}</div>
           ${data.note ? `<p style="font-size:.8rem;color:var(--muted);margin-top:10px;font-style:italic">${data.note}</p>` : ''}
         </div>
       `;
@@ -663,7 +675,7 @@ async function mercado(el) {
     h.querySelectorAll('.report-card').forEach(c => {
       c.addEventListener('click', async () => {
         const r = await api('GET', '/market/reports/' + c.dataset.id);
-        openModal(`<button class="modal-close">×</button><h2>${r.title}</h2><div class="ai-output" style="margin-top:16px">${r.content}</div>`);
+        openModal(`<button class="modal-close">×</button><h2>${safeHtml(r.title)}</h2><div class="ai-output" style="margin-top:16px">${safeHtml(r.content)}</div>`);
       });
     });
   }
@@ -681,7 +693,7 @@ async function mercado(el) {
       result.innerHTML = `
         <div class="card">
           <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">${report.title}</h3>
-          <div class="ai-output">${report.content}</div>
+          <div class="ai-output">${safeHtml(report.content)}</div>
         </div>
       `;
       await loadHistory();
@@ -750,7 +762,7 @@ async function insights(el) {
       let campaignData;
       try { campaignData = JSON.parse(raw); } catch { campaignData = { raw }; }
       const data = await api('POST', '/insights/suggest', { campaignData });
-      result.innerHTML = `<div class="card"><div class="ai-output">${data.analysis}</div></div>`;
+      result.innerHTML = `<div class="card"><div class="ai-output">${safeHtml(data.analysis)}</div></div>`;
       toast('Análise gerada!');
     } catch (err) {
       result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
