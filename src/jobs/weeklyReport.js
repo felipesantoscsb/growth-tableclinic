@@ -3,17 +3,25 @@ const db = require('../models/db');
 const { generateMarketResearch } = require('../services/claude');
 
 async function sendWhatsApp(message) {
-  const { ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_BASE_URL, ADMIN_WHATSAPP } = process.env;
-  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) {
-    console.log('[WeeklyReport] ZAPI não configurado, pulando envio WhatsApp');
+  const { ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN, ZAPI_BASE_URL, ADMIN_WHATSAPP } = process.env;
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
+    console.log('[WeeklyReport] ZAPI não configurado (ZAPI_INSTANCE_ID, ZAPI_TOKEN e ZAPI_CLIENT_TOKEN obrigatórios), pulando envio WhatsApp');
     return;
   }
   try {
-    await fetch(`${ZAPI_BASE_URL}/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`, {
+    const res = await fetch(`${ZAPI_BASE_URL}/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Client-Token': ZAPI_CLIENT_TOKEN,
+      },
       body: JSON.stringify({ phone: ADMIN_WHATSAPP, message }),
     });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error('[WeeklyReport] ZAPI erro HTTP', res.status, body);
+      return;
+    }
     console.log('[WeeklyReport] WhatsApp enviado para', ADMIN_WHATSAPP);
   } catch (e) {
     console.error('[WeeklyReport] Erro ao enviar WhatsApp:', e.message);
