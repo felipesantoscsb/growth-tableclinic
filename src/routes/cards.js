@@ -6,6 +6,25 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
 const { generateCarousel, cleanTmp } = require('../services/carousel');
 
+// GET /api/cards/carousel-download/:sessionId — sem auth (link temporário por sessionId)
+router.get('/carousel-download/:sessionId', (req, res) => {
+  const sessionId = req.params.sessionId;
+  if (!/^carousel_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
+
+  const TMP_DIR = path.resolve(__dirname, '../../tmp');
+  const dir = path.resolve(TMP_DIR, sessionId);
+  if (!dir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
+
+  if (!fs.existsSync(dir)) return fail(res, 'Sessão não encontrada ou expirada', 404);
+  const zipFile = fs.readdirSync(dir).find(f => f.endsWith('.zip'));
+  if (!zipFile) return fail(res, 'ZIP não encontrado ou expirado', 404);
+
+  const zipPath = path.join(dir, zipFile);
+  res.setHeader('Content-Disposition', `attachment; filename="${zipFile}"`);
+  res.setHeader('Content-Type', 'application/zip');
+  fs.createReadStream(zipPath).pipe(res);
+});
+
 router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
@@ -193,24 +212,5 @@ router.post('/:id/carousel', async (req, res) => {
   }
 });
 
-// GET /api/cards/carousel-download/:sessionId — serve o ZIP para download
-router.get('/carousel-download/:sessionId', (req, res) => {
-  const sessionId = req.params.sessionId;
-  if (!/^carousel_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
-
-  // fix path traversal: confirmar que o dir resolvido está contido em tmp/
-  const TMP_DIR = path.resolve(__dirname, '../../tmp');
-  const dir = path.resolve(TMP_DIR, sessionId);
-  if (!dir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
-
-  if (!fs.existsSync(dir)) return fail(res, 'Sessão não encontrada ou expirada', 404);
-  const zipFile = fs.readdirSync(dir).find(f => f.endsWith('.zip'));
-  if (!zipFile) return fail(res, 'ZIP não encontrado ou expirado', 404);
-
-  const zipPath = path.join(dir, zipFile);
-  res.setHeader('Content-Disposition', `attachment; filename="${zipFile}"`);
-  res.setHeader('Content-Type', 'application/zip');
-  fs.createReadStream(zipPath).pipe(res);
-});
 
 module.exports = router;

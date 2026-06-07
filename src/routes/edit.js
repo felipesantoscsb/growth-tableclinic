@@ -5,6 +5,23 @@ const { authMiddleware } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
 const { editVideo } = require('../services/videoEditor');
 
+// GET /api/edit/download/:sessionId — serve o vídeo editado para download (sem auth — link temporário por sessionId)
+router.get('/download/:sessionId', (req, res) => {
+  const sessionId = req.params.sessionId;
+  if (!/^video_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
+
+  const TMP_DIR = path.resolve(__dirname, '../../tmp');
+  const sessionDir = path.resolve(TMP_DIR, sessionId);
+  if (!sessionDir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
+
+  const outputPath = path.join(sessionDir, 'output.mp4');
+  if (!fs.existsSync(outputPath)) return fail(res, 'Arquivo não encontrado ou expirado', 404);
+
+  res.setHeader('Content-Disposition', `attachment; filename="tableclinic_${sessionId}.mp4"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  fs.createReadStream(outputPath).pipe(res);
+});
+
 router.use(authMiddleware);
 
 // POST /api/edit/video — edição real via FFmpeg
@@ -26,24 +43,6 @@ router.post('/video', async (req, res) => {
     console.error('[edit/video]', e.message);
     fail(res, e.message);
   }
-});
-
-// GET /api/edit/download/:sessionId — serve o vídeo editado para download
-router.get('/download/:sessionId', (req, res) => {
-  const sessionId = req.params.sessionId;
-  if (!/^video_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
-
-  // fix path traversal: confirmar que o caminho resolvido está contido em tmp/
-  const TMP_DIR = path.resolve(__dirname, '../../tmp');
-  const sessionDir = path.resolve(TMP_DIR, sessionId);
-  if (!sessionDir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
-
-  const outputPath = path.join(sessionDir, 'output.mp4');
-  if (!fs.existsSync(outputPath)) return fail(res, 'Arquivo não encontrado ou expirado', 404);
-
-  res.setHeader('Content-Disposition', `attachment; filename="tableclinic_${sessionId}.mp4"`);
-  res.setHeader('Content-Type', 'video/mp4');
-  fs.createReadStream(outputPath).pipe(res);
 });
 
 module.exports = router;

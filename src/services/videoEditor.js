@@ -111,6 +111,7 @@ function parseInstructions(instructions, duration) {
     trim: null,
     resize: null,
     subtitles: false,
+    removeSilence: false,
     speed: null,
     volume: null,
     mute: false,
@@ -140,6 +141,7 @@ function parseInstructions(instructions, duration) {
   else if (text.match(/16[:/]9|horizontal|paisagem|widescreen/)) ops.resize = '16:9';
 
   if (text.match(/legend[as]|caption|subtitle|srt/)) ops.subtitles = true;
+  if (text.match(/paus[as]|silênci[oa]|silence|cortar\s+paus/i)) ops.removeSilence = true;
 
   const speedMatch = text.match(/(\d+(?:\.\d+)?)[x×]\s*(?:velocidade|speed)/i)
     || text.match(/velocidade\s+(\d+(?:\.\d+)?)/i);
@@ -154,6 +156,57 @@ function parseInstructions(instructions, duration) {
   if (text.match(/preto\s+e\s+branco|grayscale|cinza|b&w/i)) ops.grayscale = true;
 
   return ops;
+}
+
+// Detecta segmentos de silêncio e retorna lista de intervalos com fala
+function detectSilenceSegments(inputPath) {
+  return new Promise((resolve, reject) => {
+    const silences = [];
+    let stderr = '';
+    ffmpeg(inputPath)
+      .audioFilters('silencedetect=noise=-35dB:d=0.5')
+      .outputOptions(['-f null'])
+      .output('/dev/null')
+      .on('stderr', line => {
+        stderr += line + '\n';
+        const startMatch = line.match(/silence_start: ([\d.]+)/);
+        const endMatch   = line.match(/silence_end: ([\d.]+)/);
+        if (startMatch) silences.push({ start: parseFloat(startMatch[1]) });
+        if (endMatch && silences.length > 0 && silences[silences.length-1].end === undefined)
+          silences[silences.length-1].end = parseFloat(endMatch[1]);
+      })
+      .on('end', () => resolve(silences))
+      .on('error', reject)
+      .run();
+  });
+}
+
+// Constrói filtro FFmpeg para remover segmentos de silêncio
+function buildSilenceRemoveFilter(silences, duration) {
+  // Constrói lista de segmentos de fala
+  const speechSegments = [];
+  let cursor = 0;
+  for (const s of silences) {
+    const start = s.start ?? 0;
+    const end   = s.end   ?? duration;
+    if (start > cursor + 0.1) speechSegments.push({ start: cursor, end: start });
+    cursor = end;
+  }
+  if (cursor < duration - 0.1) speechSegments.push({ start: cursor, end: duration });
+  if (speechSegments.length === 0) return null;
+
+  // trim + concat via filtergraph
+  const vParts = speechSegments.map((s, i) => `[0:v]trim=${s.start}:${s.end},setpts=PTS-STARTPTS[v${i}]`);
+  const aParts = speechSegments.map((s, i) => `[0:a]atrim=${s.start}:${s.end},asetpts=PTS-STARTPTS[a${i}]`);
+  const vInputs = speechSegments.map((_, i) => `[v${i}]`).join('');
+  const aInputs = speechSegments.map((_, i) => `[a${i}]`).join('');
+  const n = speechSegments.length;
+  const filter = [
+    ...vParts, ...aParts,
+    `${vInputs}concat=n=${n}:v=1:a=0[vout]`,
+    `${aInputs}concat=n=${n}:v=0:a=1[aout]`,
+  ].join(';');
+  return { filter, speechSegments };
 }
 
 async function editVideo({ video_url, instructions, cardId }) {
@@ -175,43 +228,67 @@ async function editVideo({ video_url, instructions, cardId }) {
   const ops = parseInstructions(instructions, duration);
   const outputPath = path.join(sessionDir, 'output.mp4');
 
+  // Detecta silêncios antes do ffmpeg principal se necessário
+  let silenceFilter = null;
+  if (ops.removeSilence) {
+    console.log('[FFmpeg] Detectando silêncios...');
+    const silences = await detectSilenceSegments(inputPath);
+    if (silences.length > 0) {
+      silenceFilter = buildSilenceRemoveFilter(silences, duration);
+      console.log(`[FFmpeg] ${silences.length} silêncio(s) detectado(s), ${silenceFilter?.speechSegments?.length} segmentos de fala`);
+    }
+  }
+
   await new Promise((resolve, reject) => {
     let cmd = ffmpeg(inputPath);
 
-    if (ops.trim) {
-      cmd = cmd.setStartTime(ops.trim.start);
-      if (ops.trim.end < duration) cmd = cmd.setDuration(ops.trim.end - ops.trim.start);
-    }
-
-    const vFilters = [];
-    if (ops.resize === '9:16') {
-      vFilters.push('crop=ih*9/16:ih,scale=1080:1920');
-    } else if (ops.resize === '1:1') {
-      vFilters.push('crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080');
-    } else if (ops.resize === '16:9') {
-      vFilters.push('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2');
-    }
-
-    if (ops.speed && ops.speed !== 1.0) vFilters.push(`setpts=${(1 / ops.speed).toFixed(4)}*PTS`);
-    if (ops.grayscale) vFilters.push('hue=s=0');
-    if (vFilters.length > 0) cmd = cmd.videoFilters(vFilters);
-
-    if (ops.mute) {
-      cmd = cmd.noAudio();
+    // Se removeSilence, usa filtergraph complexo (ignora trim simples para não conflitar)
+    if (silenceFilter) {
+      cmd = cmd
+        .complexFilter(silenceFilter.filter)
+        .outputOptions([
+          '-map [vout]', '-map [aout]',
+          '-c:v libx264', '-preset fast', '-crf 23',
+          '-c:a aac', '-b:a 128k',
+          '-movflags +faststart', '-pix_fmt yuv420p',
+        ]);
     } else {
-      const aFilters = [];
-      if (ops.speed && ops.speed !== 1.0) {
-        const s = ops.speed;
-        if (s > 2.0) aFilters.push('atempo=2.0', `atempo=${(s / 2.0).toFixed(4)}`);
-        else if (s < 0.5) aFilters.push('atempo=0.5', `atempo=${(s / 0.5).toFixed(4)}`);
-        else aFilters.push(`atempo=${s.toFixed(4)}`);
+      if (ops.trim) {
+        cmd = cmd.setStartTime(ops.trim.start);
+        if (ops.trim.end < duration) cmd = cmd.setDuration(ops.trim.end - ops.trim.start);
       }
-      if (ops.volume !== null) aFilters.push(`volume=${ops.volume}`);
-      if (aFilters.length > 0) cmd = cmd.audioFilters(aFilters);
+
+      const vFilters = [];
+      if (ops.resize === '9:16') {
+        vFilters.push('crop=ih*9/16:ih,scale=1080:1920');
+      } else if (ops.resize === '1:1') {
+        vFilters.push('crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080');
+      } else if (ops.resize === '16:9') {
+        vFilters.push('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2');
+      }
+
+      if (ops.speed && ops.speed !== 1.0) vFilters.push(`setpts=${(1 / ops.speed).toFixed(4)}*PTS`);
+      if (ops.grayscale) vFilters.push('hue=s=0');
+      if (vFilters.length > 0) cmd = cmd.videoFilters(vFilters);
+
+      if (ops.mute) {
+        cmd = cmd.noAudio();
+      } else {
+        const aFilters = [];
+        if (ops.speed && ops.speed !== 1.0) {
+          const s = ops.speed;
+          if (s > 2.0) aFilters.push('atempo=2.0', `atempo=${(s / 2.0).toFixed(4)}`);
+          else if (s < 0.5) aFilters.push('atempo=0.5', `atempo=${(s / 0.5).toFixed(4)}`);
+          else aFilters.push(`atempo=${s.toFixed(4)}`);
+        }
+        if (ops.volume !== null) aFilters.push(`volume=${ops.volume}`);
+        if (aFilters.length > 0) cmd = cmd.audioFilters(aFilters);
+      }
+
+      cmd.outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a aac', '-b:a 128k', '-movflags +faststart', '-pix_fmt yuv420p']);
     }
 
     cmd
-      .outputOptions(['-c:v libx264', '-preset fast', '-crf 23', '-c:a aac', '-b:a 128k', '-movflags +faststart', '-pix_fmt yuv420p'])
       .output(outputPath)
       .on('start', c => console.log('[FFmpeg] Iniciando:', c))
       .on('progress', p => console.log(`[FFmpeg] ${Math.round(p.percent || 0)}%`))
@@ -220,14 +297,13 @@ async function editVideo({ video_url, instructions, cardId }) {
       .run();
   });
 
+  const finalDuration = await getVideoDuration(outputPath);
   const stat = fs.statSync(outputPath);
   return {
     outputPath,
     sessionDir,
     duration_original: Math.round(duration),
-    duration_output: ops.trim
-      ? Math.round((ops.trim.end - ops.trim.start) / (ops.speed || 1))
-      : Math.round(duration / (ops.speed || 1)),
+    duration_output: Math.round(finalDuration),
     size_mb: (stat.size / 1_048_576).toFixed(2),
     ops_applied: ops,
   };

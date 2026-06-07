@@ -701,6 +701,8 @@ async function edicao(el) {
         ops.speed   ? `⏩ Velocidade: ${ops.speed}×` : null,
         ops.mute    ? `🔇 Áudio removido` : ops.volume !== null ? `🔊 Volume: ${Math.round(ops.volume * 100)}%` : null,
         ops.grayscale ? `🎞 Preto e branco` : null,
+        ops.removeSilence ? `✂️ Pausas removidas` : null,
+        ops.subtitles ? `💬 Legendas (burned-in)` : null,
       ].filter(Boolean);
 
       result.innerHTML = `
