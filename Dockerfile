@@ -2,6 +2,7 @@ FROM node:20-slim
 
 RUN apt-get update && apt-get install -y \
   chromium \
+  ffmpeg \
   fonts-liberation \
   libglib2.0-0 \
   libnss3 \
@@ -23,7 +24,7 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 COPY . .
 
 EXPOSE 3000
