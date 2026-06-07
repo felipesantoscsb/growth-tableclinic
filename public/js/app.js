@@ -481,6 +481,7 @@ async function gerador(el) {
       const fd = new FormData(e.target);
       const body = Object.fromEntries(fd.entries());
       const card = await api('POST', '/generate/content', body);
+      const isCarousel = ['carrossel','carrossel_video'].includes(card.format || body.format);
       result.innerHTML = `
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -489,8 +490,37 @@ async function gerador(el) {
           </div>
           <div class="ai-output">${safeHtml(card.content) || '(sem conteúdo)'}</div>
           <p style="color:var(--muted);font-size:.8rem;margin-top:10px">Card #${card.id} salvo no calendário como rascunho.</p>
+          ${isCarousel ? `
+          <div style="margin-top:14px;border-top:1px solid var(--bege);padding-top:14px">
+            <button class="btn btn-accent btn-sm" id="inline-carousel-btn">🎨 Gerar slides PNG</button>
+            <div id="inline-carousel-result" style="margin-top:10px"></div>
+          </div>` : ''}
         </div>
       `;
+      if (isCarousel) {
+        result.querySelector('#inline-carousel-btn').addEventListener('click', async () => {
+          const slideBtn = result.querySelector('#inline-carousel-btn');
+          const slideResult = result.querySelector('#inline-carousel-result');
+          slideBtn.disabled = true;
+          slideBtn.textContent = '⏳ Gerando slides...';
+          slideResult.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
+          try {
+            const data = await api('POST', `/cards/${card.id}/carousel`);
+            slideResult.innerHTML = `
+              <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+                <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+              </div>`;
+            toast(`${data.slides} slides prontos!`);
+          } catch (e) {
+            slideResult.innerHTML = `<p style="color:#c0392b;font-size:.85rem">Erro: ${safeHtml(e.message)}</p>`;
+            toast(e.message, 'error');
+          } finally {
+            slideBtn.disabled = false;
+            slideBtn.textContent = '🎨 Gerar slides PNG';
+          }
+        });
+      }
       toast('Conteúdo gerado e salvo!');
     } catch (err) {
       result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${err.message}</p></div>`;
