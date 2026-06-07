@@ -18,6 +18,10 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { name, email, password, role, nutri_name, whatsapp } = req.body;
+    // fix #3: validar campos obrigatórios antes de qualquer operação
+    if (!name || !email || !password || !role) return fail(res, 'name, email, password e role são obrigatórios', 400);
+    const VALID_ROLES = ['admin', 'evelyn', 'editor', 'nutri'];
+    if (!VALID_ROLES.includes(role)) return fail(res, 'role inválido', 400);
     const hash = await bcrypt.hash(password, 10);
     const { rows } = await db.query(
       `INSERT INTO users (name,email,password,role,nutri_name,whatsapp)
