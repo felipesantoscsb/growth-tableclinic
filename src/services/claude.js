@@ -125,12 +125,15 @@ function parseCarouselJson(text) {
   if (!data || !Array.isArray(data.slides) || data.slides.length === 0)
     throw new Error('A IA não retornou slides — tente novamente');
   // Sanitiza: mantém só os campos esperados e garante tipos
+  const str = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
   data.slides = data.slides
     .map(s => ({
       role: ['hook', 'content', 'cta'].includes(s.role) ? s.role : 'content',
+      title: str(s.title),          // só quando o usuário fornece um título
       text: String(s.text || '').trim(),
+      signature: str(s.signature),  // assinatura (exibida menor, em itálico)
       photo: s.photo === true,
-      bg: typeof s.bg === 'string' && s.bg.trim() ? s.bg.trim() : null,
+      bg: str(s.bg),
     }))
     .filter(s => s.text);
   data.legenda = typeof data.legenda === 'string' ? data.legenda : '';
@@ -144,35 +147,78 @@ async function generateCarouselContent({ pilar, briefing, user_role, nutri_name 
   const pilarCtx = PILAR_CONTEXT[pilar] || '';
   const systemPrompt = `${voiceForUser(user_role, nutri_name)}
 
-Você monta CARROSSÉIS para Instagram. O briefing do usuário pode MISTURAR:
-- CONTEÚDO: o texto que deve aparecer nos slides;
-- INSTRUÇÕES: formatação, cor de fundo, em qual slide usar foto, número de slides, etc.
+Você monta CARROSSÉIS para Instagram. O briefing funciona como INSTRUÇÕES completas
+(como uma conversa): leia tudo, ENTENDA a intenção e só então monte os slides.
+Ele pode misturar o CONTEÚDO dos slides com INSTRUÇÕES (formatação, cor de fundo,
+em qual slide usar foto, assinatura, título de um slide, número de slides, etc.).
 
-Sua tarefa:
-1. Leia o briefing e SEPARE instrução de conteúdo.
-2. Escreva APENAS o texto que aparece em cada slide. NUNCA coloque instrução
-   dentro do texto (nada de "fundo bege", "use foto aqui", "Cormorant", "tamanho 40").
-3. As instruções vão SOMENTE nos campos estruturais (role, photo, bg).
-4. Respeite a quantidade de slides se o briefing pedir; senão use de 5 a 7
-   (1 capa + miolo + 1 CTA).
+Regras:
+1. Interprete o briefing — não o copie ao pé da letra.
+2. Em "text" coloque APENAS o texto que aparece no slide. NUNCA coloque instrução,
+   rótulo ou número de slide dentro do "text".
+3. NÃO nomeie nem numere os slides. NUNCA gere "Slide 1", "Capa", "CTA" como título.
+   Só preencha "title" se o usuário pedir explicitamente um título para o slide.
+4. Assinatura (ex.: "assinatura Evelyn Liu — Nutricionista") vai em "signature"
+   (será exibida menor e em itálico), nunca no "text".
+5. Respeite a quantidade de slides se pedida; senão use de 5 a 7.
 
-Responda SOMENTE com JSON válido, sem nenhum texto antes ou depois:
+Responda SOMENTE com JSON válido, sem nada antes ou depois:
 {
   "slides": [
-    { "role": "hook|content|cta", "text": "texto que aparece no slide", "photo": false, "bg": null }
+    { "role": "hook|content|cta", "title": null, "text": "texto que aparece no slide", "signature": null, "photo": false, "bg": null }
   ],
   "legenda": "legenda do post com 3-5 parágrafos + hashtags"
 }
-Regras dos campos:
-- role: "hook" no primeiro slide, "cta" no último, "content" nos do meio.
-- photo: true SÓ se o briefing pedir foto naquele slide; caso contrário false.
-- bg: null para usar o padrão da marca; ou "verde"|"bege"|"terracota" se o briefing pedir cor específica.`;
+Campos (title/signature/bg são null por padrão — só preencha se o briefing pedir):
+- role: "hook" no primeiro, "cta" no último, "content" no meio (controla só o estilo).
+- title: título do slide, apenas se o usuário fornecer um.
+- signature: assinatura do slide, apenas se o usuário pedir.
+- photo: true só se o briefing pedir foto naquele slide.
+- bg: "verde" | "bege" | "terracota" se o usuário pedir cor; senão null.`;
 
   const text = await streamText({
     model: MODEL,
     max_tokens: 3000,
     system: systemPrompt,
     messages: [{ role: 'user', content: `${pilarCtx}\n\nBriefing:\n${briefing}` }],
+  });
+
+  return parseCarouselJson(text);
+}
+
+// Interpreta um carrossel JÁ ESCRITO pelo usuário (modo "já tenho o conteúdo").
+// Diferente de generateCarouselContent: NÃO reescreve o conteúdo — apenas lê,
+// entende a intenção, separa instruções (assinatura, título, foto, cor) do texto
+// e organiza em slides. Devolve o mesmo JSON estruturado.
+async function interpretCarouselInput({ content }) {
+  const systemPrompt = `Você recebe o INPUT de um carrossel já escrito por um usuário. O input traz o
+CONTEÚDO dos slides e pode conter INSTRUÇÕES misturadas (assinatura, título de um
+slide, em qual slide usar foto, cor de fundo, como dividir os slides, formatação).
+
+Sua tarefa é INTERPRETAR (não executar ao pé da letra):
+1. MANTENHA o texto do usuário praticamente como está — não reescreva nem "melhore"
+   o conteúdo. Apenas remova do "text" as instruções que estiverem misturadas.
+2. Divida em slides conforme a intenção do usuário.
+3. NÃO numere nem rotule slides ("Slide 1", "Capa"...). Preencha "title" só se o
+   usuário tiver dado um título explícito ao slide.
+4. Assinatura (ex.: "assinatura Evelyn Liu — Nutricionista") vai em "signature"
+   (exibida menor e em itálico), nunca no "text".
+5. Instruções de foto/cor vão em "photo"/"bg".
+
+Responda SOMENTE com JSON válido, sem nada antes ou depois:
+{
+  "slides": [
+    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null }
+  ],
+  "legenda": null
+}
+role: "hook" no primeiro, "cta" no último, "content" no meio. title/signature/bg null por padrão.`;
+
+  const text = await streamText({
+    model: MODEL,
+    max_tokens: 3000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: `Input do carrossel:\n${content}` }],
   });
 
   return parseCarouselJson(text);
@@ -312,4 +358,4 @@ Se os dados forem poucos, diga isso e seja cauteloso nas conclusões.`;
   return streamText({ model: MODEL, max_tokens: 2500, system, messages: [{ role: 'user', content: userContent }] });
 }
 
-module.exports = { generateContent, generateCarouselContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights, analyzeInstagramPerformance };
+module.exports = { generateContent, generateCarouselContent, interpretCarouselInput, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights, analyzeInstagramPerformance };

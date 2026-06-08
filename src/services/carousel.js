@@ -30,7 +30,7 @@ function blockToSlide(chunk, i, total) {
   const isFirst = i === 0;
   const isLast = i === total - 1;
   return {
-    label: isFirst ? 'SLIDE 1' : isLast ? 'SLIDE FINAL' : `SLIDE ${i + 1}`,
+    label: '', // sem rótulo automático — título só quando o usuário fornece
     text: chunk.trim(),
     bg: isFirst || isLast ? THEME.verde : THEME.bege,
     textColor: isFirst || isLast ? THEME.bege : THEME.verde,
@@ -185,8 +185,10 @@ function slidesFromStructured(rawContent) {
     const hex = typeof s.bg === 'string' && /^#[0-9a-fA-F]{3,6}$/.test(s.bg) ? s.bg : null;
     const bg = named || hex || (isCTA ? THEME.terracota : isHook ? THEME.verde : THEME.bege);
     return {
-      label: isHook ? 'CAPA' : isCTA ? 'CTA' : `SLIDE ${i + 1}`,
+      // sem rótulo automático — só o título que o usuário forneceu (se houver)
+      label: typeof s.title === 'string' && s.title.trim() ? s.title.trim() : '',
       text: String(s.text || '').trim(),
+      signature: typeof s.signature === 'string' && s.signature.trim() ? s.signature.trim() : '',
       bg,
       textColor: bg === THEME.bege ? THEME.verde : THEME.bege,
       fontSize: isHook ? 52 : 40,
@@ -201,11 +203,13 @@ function buildSlideHtml(slide, index, total, photoPath) {
   const photoB64 = photoPath && fs.existsSync(photoPath)
     ? `data:image/jpeg;base64,${fs.readFileSync(photoPath).toString('base64')}`
     : null;
-  const accent = slide.isCTA ? THEME.terracota : (slide.bg === THEME.bege ? THEME.verde : THEME.terracota);
-  const textLines = slide.text
-    .split('\n')
-    .map(l => `<p>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>`)
-    .join('');
+  // accent precisa contrastar com o fundo (nunca terracota sobre terracota no CTA)
+  const accent = slide.bg === THEME.bege ? THEME.verde
+    : slide.bg === THEME.terracota ? THEME.bege
+    : THEME.terracota;
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const textLines = slide.text.split('\n').map(l => `<p>${esc(l)}</p>`).join('');
+  const sigSize = Math.max(18, Math.round(Math.min(slide.fontSize, 60) * 0.5));
 
   return `<!DOCTYPE html>
 <html>
@@ -262,12 +266,11 @@ function buildSlideHtml(slide, index, total, photoPath) {
     width: 100%;
   }
   .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 3px;
-    opacity: 0.5;
-    font-weight: 400;
-    margin-bottom: 20px;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: ${Math.max(22, Math.round(Math.min(slide.fontSize, 60) * 0.6))}px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin-bottom: 16px;
     color: ${accent};
   }
   .content p {
@@ -278,6 +281,13 @@ function buildSlideHtml(slide, index, total, photoPath) {
     margin-bottom: 16px;
   }
   .content p:last-child { margin-bottom: 0; }
+  .signature {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: ${sigSize}px;
+    opacity: 0.78;
+    margin-top: 28px;
+  }
   ${slide.isCTA ? `
   .cta-tag {
     display: inline-block;
@@ -295,12 +305,13 @@ function buildSlideHtml(slide, index, total, photoPath) {
 </head>
 <body>
   ${photoB64 ? '<div class="photo-bg"></div>' : ''}
-  <div class="corner-mark">TableClinic</div>
+  <div class="corner-mark">Table</div>
   <div class="slide-num">${index + 1} / ${total}</div>
   <div class="accent-bar"></div>
   <div class="content">
-    <div class="label">${slide.label}</div>
+    ${slide.label ? `<div class="label">${esc(slide.label)}</div>` : ''}
     ${textLines}
+    ${slide.signature ? `<div class="signature">${esc(slide.signature)}</div>` : ''}
     ${slide.isCTA ? `<div class="cta-tag">Salve para não esquecer ✦</div>` : ''}
   </div>
 </body>

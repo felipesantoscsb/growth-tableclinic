@@ -16,14 +16,13 @@ function renderCardContentHtml(content) {
   try {
     const d = JSON.parse(content);
     if (d && Array.isArray(d.slides)) {
-      const n = d.slides.length;
       const slidesHtml = d.slides.map((s, i) => {
-        const role = ['hook', 'content', 'cta'].includes(s.role) ? s.role : (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'content');
-        const roleLabel = role === 'hook' ? 'CAPA' : role === 'cta' ? 'CTA' : `SLIDE ${i + 1}`;
-        const tags = [s.photo ? '📷 foto' : null, s.bg ? `🎨 ${s.bg}` : null].filter(Boolean).join(' · ');
+        // índice apenas para leitura (não é rótulo do slide); título só se houver
+        const tags = [s.title ? `“${s.title}”` : null, s.photo ? '📷 foto' : null, s.bg ? `🎨 ${s.bg}` : null, s.signature ? '✍️ assinatura' : null].filter(Boolean).join(' · ');
         return `<div style="margin-bottom:12px">
-          <div style="font-size:.68rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase">${roleLabel}${tags ? ` · ${safeHtml(tags)}` : ''}</div>
+          <div style="font-size:.68rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase">${i + 1}${tags ? ` · ${safeHtml(tags)}` : ''}</div>
           <div>${safeHtml(s.text)}</div>
+          ${s.signature ? `<div style="font-style:italic;color:var(--muted);font-size:.85rem;margin-top:2px">${safeHtml(s.signature)}</div>` : ''}
         </div>`;
       }).join('');
       const leg = d.legenda
@@ -503,15 +502,15 @@ async function gerador(el) {
                   <input type="radio" name="carousel_mode" value="ai" checked> Gerar roteiro com IA e depois criar PNG
                 </label>
                 <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer">
-                  <input type="radio" name="carousel_mode" value="direct"> Já tenho os slides — gerar PNG direto
+                  <input type="radio" name="carousel_mode" value="direct"> Já tenho o conteúdo — a IA interpreta e gera os PNGs
                 </label>
               </div>
             </div>
 
             <div id="direct-content-field" style="display:none" class="form-group">
-              <label style="font-size:.85rem">Conteúdo dos slides</label>
-              <textarea id="direct-slides-content" rows="8" style="font-size:.82rem;font-family:monospace" placeholder="SLIDE 1: Título de impacto&#10;&#10;SLIDE 2: Conteúdo do slide&#10;&#10;SLIDE 3: Mais conteúdo&#10;&#10;SLIDE FINAL: CTA"></textarea>
-              <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Use SLIDE 1, SLIDE 2... SLIDE FINAL para separar os slides.</p>
+              <label style="font-size:.85rem">Conteúdo e instruções dos slides</label>
+              <textarea id="direct-slides-content" rows="8" style="font-size:.82rem" placeholder="Escreva como você falaria comigo. Ex.:&#10;&#10;Slide 1: gancho forte sobre fome emocional&#10;Depois 3 slides explicando os sinais&#10;Último slide: CTA pro quiz no link&#10;Assinatura Evelyn Liu - Nutricionista (tipografia menor, em itálico)&#10;Usar foto no slide 2"></textarea>
+              <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Escreva livremente — a IA lê, entende as instruções (assinatura, foto, cor, título) e organiza os slides. Não precisa numerar nem formatar.</p>
             </div>
 
             <div class="form-group" style="margin-bottom:0">

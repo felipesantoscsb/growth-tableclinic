@@ -5,6 +5,7 @@ const db = require('../models/db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
 const { generateCarousel, cleanTmp } = require('../services/carousel');
+const { interpretCarouselInput } = require('../services/claude');
 
 // GET /api/cards/carousel-download/:sessionId — sem auth (link temporário por sessionId)
 router.get('/carousel-download/:sessionId', (req, res) => {
@@ -192,7 +193,17 @@ router.post('/carousel-direct', async (req, res) => {
     if (!content) return fail(res, 'content obrigatório', 400);
 
     cleanTmp();
-    const result = await generateCarousel(content, `direct_${req.user.id}`, drive_folder_url || null);
+
+    // A IA interpreta o input (entende intenção, separa instrução de conteúdo,
+    // aplica assinatura/título/foto/cor) → JSON estruturado. Se falhar (sem chave,
+    // erro), cai no parser de texto: o render continua funcionando.
+    let toRender = content;
+    try {
+      toRender = JSON.stringify(await interpretCarouselInput({ content }));
+    } catch (e) {
+      console.warn('[carousel-direct] interpretação IA falhou, usando parser de texto:', e.message);
+    }
+    const result = await generateCarousel(toRender, `direct_${req.user.id}`, drive_folder_url || null);
 
     ok(res, {
       slides: result.slides,
