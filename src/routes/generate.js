@@ -12,13 +12,23 @@ router.post('/content', async (req, res) => {
     const { format, pilar, briefing, nutri_name } = req.body;
     if (!format || !pilar || !briefing) return fail(res, 'format, pilar e briefing obrigatórios', 400);
 
-    const content = await claude.generateContent({
-      format,
-      pilar,
-      briefing,
-      user_role: req.user.role,
-      nutri_name: nutri_name || req.user.nutri_name,
-    });
+    // Carrossel: geração estruturada (separa conteúdo de instrução → JSON).
+    // Demais formatos: texto livre. O conteúdo do card guarda o JSON quando carrossel.
+    const isCarousel = ['carrossel', 'carrossel_video'].includes(format);
+    const content = isCarousel
+      ? JSON.stringify(await claude.generateCarouselContent({
+          pilar,
+          briefing,
+          user_role: req.user.role,
+          nutri_name: nutri_name || req.user.nutri_name,
+        }))
+      : await claude.generateContent({
+          format,
+          pilar,
+          briefing,
+          user_role: req.user.role,
+          nutri_name: nutri_name || req.user.nutri_name,
+        });
 
     const title = briefing.slice(0, 80);
     const { rows } = await db.query(

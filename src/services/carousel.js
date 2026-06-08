@@ -166,6 +166,37 @@ function parseSlides(rawContent) {
   return result;
 }
 
+// Converte o conteúdo estruturado (JSON da IA: {slides:[{role,text,photo,bg}]})
+// em slides de render. Retorna null se não for JSON estruturado — aí o caller
+// cai no parseSlides de texto (modo manual/colado e cards antigos).
+function slidesFromStructured(rawContent) {
+  let data;
+  try { data = JSON.parse(String(rawContent || '').trim()); } catch { return null; }
+  if (!data || !Array.isArray(data.slides) || data.slides.length === 0) return null;
+
+  const n = data.slides.length;
+  return data.slides.map((s, i) => {
+    const role = ['hook', 'content', 'cta'].includes(s.role)
+      ? s.role : (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'content');
+    const isHook = role === 'hook';
+    const isCTA = role === 'cta';
+    // bg explícito (nome da marca ou hex) ou padrão por papel: capa=verde, cta=terracota, miolo=bege
+    const named = typeof s.bg === 'string' ? THEME[s.bg.toLowerCase()] : null;
+    const hex = typeof s.bg === 'string' && /^#[0-9a-fA-F]{3,6}$/.test(s.bg) ? s.bg : null;
+    const bg = named || hex || (isCTA ? THEME.terracota : isHook ? THEME.verde : THEME.bege);
+    return {
+      label: isHook ? 'CAPA' : isCTA ? 'CTA' : `SLIDE ${i + 1}`,
+      text: String(s.text || '').trim(),
+      bg,
+      textColor: bg === THEME.bege ? THEME.verde : THEME.bege,
+      fontSize: isHook ? 52 : 40,
+      isHook,
+      isCTA,
+      wantPhoto: s.photo === true,
+    };
+  }).filter(s => s.text);
+}
+
 function buildSlideHtml(slide, index, total, photoPath) {
   const photoB64 = photoPath && fs.existsSync(photoPath)
     ? `data:image/jpeg;base64,${fs.readFileSync(photoPath).toString('base64')}`
@@ -277,7 +308,8 @@ function buildSlideHtml(slide, index, total, photoPath) {
 }
 
 async function generateCarousel(rawContent, cardId, driveFolderUrl) {
-  const slides = parseSlides(rawContent);
+  // Conteúdo estruturado (IA) tem prioridade; texto livre/colado cai no parseSlides
+  const slides = slidesFromStructured(rawContent) || parseSlides(rawContent);
   if (slides.length === 0) throw new Error('Nenhum slide detectado no conteúdo');
 
   const sessionDir = path.join(TMP_DIR, `carousel_${cardId}_${Date.now()}`);
@@ -305,9 +337,12 @@ async function generateCarousel(rawContent, cardId, driveFolderUrl) {
     const page = await browser.newPage();
     await page.setViewport({ width: 1080, height: 1080, deviceScaleFactor: 2 });
 
+    let photoCursor = 0;
     for (let i = 0; i < slides.length; i++) {
-      // Distribui fotos pelos slides (uma por slide, ciclando se necessário)
-      const photo = photos.length > 0 ? photos[i % photos.length] : null;
+      // Estruturado respeita o flag por slide (só usa foto onde pedido);
+      // legado (wantPhoto undefined) cicla foto em todos os slides.
+      const usePhoto = slides[i].wantPhoto !== false;
+      const photo = (usePhoto && photos.length > 0) ? photos[photoCursor++ % photos.length] : null;
       const html = buildSlideHtml(slides[i], i, slides.length, photo);
       // fix: não usar networkidle0 — se o CDN de fontes travar, a geração inteira falha.
       // Renderiza assim que o DOM carrega e espera as fontes no máximo 3s (fallback seguro).

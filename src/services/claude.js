@@ -111,6 +111,73 @@ async function generateContent({ format, pilar, briefing, user_role, nutri_name 
   return extractText(msg);
 }
 
+// Extrai o objeto JSON do carrossel da resposta do modelo, de forma tolerante
+// (remove cercas ```json e captura o primeiro bloco {...} se houver ruído).
+function parseCarouselJson(text) {
+  let raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  let data;
+  try { data = JSON.parse(raw); }
+  catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('A IA não retornou um carrossel válido — tente novamente');
+    data = JSON.parse(m[0]);
+  }
+  if (!data || !Array.isArray(data.slides) || data.slides.length === 0)
+    throw new Error('A IA não retornou slides — tente novamente');
+  // Sanitiza: mantém só os campos esperados e garante tipos
+  data.slides = data.slides
+    .map(s => ({
+      role: ['hook', 'content', 'cta'].includes(s.role) ? s.role : 'content',
+      text: String(s.text || '').trim(),
+      photo: s.photo === true,
+      bg: typeof s.bg === 'string' && s.bg.trim() ? s.bg.trim() : null,
+    }))
+    .filter(s => s.text);
+  data.legenda = typeof data.legenda === 'string' ? data.legenda : '';
+  return data;
+}
+
+// Gera o conteúdo do carrossel SEPARANDO instrução de conteúdo. O modelo lê o
+// briefing (que pode misturar os dois), classifica, e devolve JSON estruturado:
+// o `text` traz só o que aparece no slide; estilo vai em role/photo/bg.
+async function generateCarouselContent({ pilar, briefing, user_role, nutri_name }) {
+  const pilarCtx = PILAR_CONTEXT[pilar] || '';
+  const systemPrompt = `${voiceForUser(user_role, nutri_name)}
+
+Você monta CARROSSÉIS para Instagram. O briefing do usuário pode MISTURAR:
+- CONTEÚDO: o texto que deve aparecer nos slides;
+- INSTRUÇÕES: formatação, cor de fundo, em qual slide usar foto, número de slides, etc.
+
+Sua tarefa:
+1. Leia o briefing e SEPARE instrução de conteúdo.
+2. Escreva APENAS o texto que aparece em cada slide. NUNCA coloque instrução
+   dentro do texto (nada de "fundo bege", "use foto aqui", "Cormorant", "tamanho 40").
+3. As instruções vão SOMENTE nos campos estruturais (role, photo, bg).
+4. Respeite a quantidade de slides se o briefing pedir; senão use de 5 a 7
+   (1 capa + miolo + 1 CTA).
+
+Responda SOMENTE com JSON válido, sem nenhum texto antes ou depois:
+{
+  "slides": [
+    { "role": "hook|content|cta", "text": "texto que aparece no slide", "photo": false, "bg": null }
+  ],
+  "legenda": "legenda do post com 3-5 parágrafos + hashtags"
+}
+Regras dos campos:
+- role: "hook" no primeiro slide, "cta" no último, "content" nos do meio.
+- photo: true SÓ se o briefing pedir foto naquele slide; caso contrário false.
+- bg: null para usar o padrão da marca; ou "verde"|"bege"|"terracota" se o briefing pedir cor específica.`;
+
+  const text = await streamText({
+    model: MODEL,
+    max_tokens: 3000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: `${pilarCtx}\n\nBriefing:\n${briefing}` }],
+  });
+
+  return parseCarouselJson(text);
+}
+
 async function generateAds({ objective, product, audience }) {
   const msg = await client.messages.create({
     model: MODEL,
@@ -210,4 +277,4 @@ Forneça:
   return extractText(msg);
 }
 
-module.exports = { generateContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights };
+module.exports = { generateContent, generateCarouselContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights };

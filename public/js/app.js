@@ -10,6 +10,33 @@ function safeHtml(str) {
     .replace(/\n/g, '<br>');
 }
 
+// Carrossel é guardado como JSON estruturado ({slides:[{role,text,photo,bg}],legenda}).
+// Renderiza de forma legível (não o JSON cru); qualquer outro conteúdo vira texto escapado.
+function renderCardContentHtml(content) {
+  try {
+    const d = JSON.parse(content);
+    if (d && Array.isArray(d.slides)) {
+      const n = d.slides.length;
+      const slidesHtml = d.slides.map((s, i) => {
+        const role = ['hook', 'content', 'cta'].includes(s.role) ? s.role : (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'content');
+        const roleLabel = role === 'hook' ? 'CAPA' : role === 'cta' ? 'CTA' : `SLIDE ${i + 1}`;
+        const tags = [s.photo ? '📷 foto' : null, s.bg ? `🎨 ${s.bg}` : null].filter(Boolean).join(' · ');
+        return `<div style="margin-bottom:12px">
+          <div style="font-size:.68rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase">${roleLabel}${tags ? ` · ${safeHtml(tags)}` : ''}</div>
+          <div>${safeHtml(s.text)}</div>
+        </div>`;
+      }).join('');
+      const leg = d.legenda
+        ? `<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--bege-dark)">
+             <div style="font-size:.68rem;letter-spacing:1.5px;color:var(--muted)">LEGENDA</div>
+             <div>${safeHtml(d.legenda)}</div>
+           </div>` : '';
+      return slidesHtml + leg;
+    }
+  } catch {}
+  return safeHtml(content);
+}
+
 // ── State ──────────────────────────────────────────────
 const state = {
   token: localStorage.getItem('token'),
@@ -348,7 +375,7 @@ function openCardDetail(card) {
       Responsável: ${card.responsible_name || '—'} · Publicação: ${formatDate(card.publish_date)}
     </p>
     ${card.drive_link ? `<p style="margin-bottom:12px"><a href="${card.drive_link}" target="_blank" style="color:var(--terracota)">🔗 Drive</a></p>` : ''}
-    ${card.content ? `<div class="ai-output">${safeHtml(card.content)}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
+    ${card.content ? `<div class="ai-output">${renderCardContentHtml(card.content)}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center">
       <select id="status-select" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
         ${['ideia','roteiro','gravado','edicao','programado','publicado'].map(s=>`<option value="${s}"${s===card.status?' selected':''}>${s}</option>`).join('')}
