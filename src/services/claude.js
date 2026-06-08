@@ -21,6 +21,15 @@ function extractText(msg) {
   return text;
 }
 
+// Respostas longas (mercado/repurpose, ~3000 tokens) podem ultrapassar o timeout
+// de 45s em modo não-streaming, resultando em "Request timed out.". O streaming
+// mantém a conexão ativa e só resolve quando o texto completo chega; usamos um
+// teto de tempo generoso (3min) já que a geração real leva ~40-60s.
+async function streamText(body, timeoutMs = 180_000) {
+  const stream = client.messages.stream(body, { timeout: timeoutMs });
+  return extractText(await stream.finalMessage());
+}
+
 const VOICE_EVELYN = `Você é a Evelyn, nutricionista comportamental. Sua voz é:
 - Feminina, acolhedora, introspectiva
 - Nunca prescritiva, nunca promete resultados físicos
@@ -130,7 +139,7 @@ Use a voz acolhedora e comportamental da Evelyn. Nunca prometa resultados físic
 }
 
 async function generateRepurpose({ transcricao }) {
-  const msg = await client.messages.create({
+  return streamText({
     model: MODEL,
     max_tokens: 3000,
     system: VOICE_EVELYN,
@@ -157,12 +166,10 @@ Versão curta, média e longa da legenda para Instagram.
 Uma variação de copy de anúncio baseada no tema do conteúdo.`,
     }],
   });
-
-  return extractText(msg);
 }
 
 async function generateMarketResearch({ tema }) {
-  const msg = await client.messages.create({
+  return streamText({
     model: MODEL,
     max_tokens: 3000,
     messages: [{
@@ -179,8 +186,6 @@ Forneça:
 5. ÂNGULOS ÚNICOS: 3 perspectivas que diferenciam a abordagem comportamental`,
     }],
   });
-
-  return extractText(msg);
 }
 
 async function analyzeInsights({ campaignData }) {
