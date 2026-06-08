@@ -21,6 +21,11 @@ const THEME = {
 // "CARD 1 -", "Página 4:", "VÍDEO DE CAPA".
 const SLIDE_HEADER_RE = /^[#>*\-\s]*\**\s*(SLIDE\s*\d+|SLIDE\s+FINAL|CARD\s*\d+|P[ÁA]GINA\s*\d+|TELA\s*\d+|V[ÍI]?DEO\s+DE\s+CAPA)\b(.*)$/i;
 
+// Formato numerado por linha: "01·Cover:", "02·Setup:", "1) ...", "1. ...", "3 - ...".
+// Captura o número e o resto. Usado só quando NÃO há cabeçalhos SLIDE/CARD/etc.,
+// para não quebrar listas numeradas dentro do conteúdo de um slide.
+const NUM_HEADER_RE = /^[#>*\s]*\**\s*(\d{1,2})\s*[·.):–—-]\s*(\S.*)$/;
+
 function blockToSlide(chunk, i, total) {
   const isFirst = i === 0;
   const isLast = i === total - 1;
@@ -47,6 +52,9 @@ function parseSlides(rawContent) {
   content = content.replace(/^[ \t]*([-*_]){3,}[ \t]*$/gm, '');
 
   const lines = content.split('\n');
+  // Se há cabeçalhos SLIDE/CARD/etc., só eles delimitam (números viram conteúdo).
+  // Sem eles, ativamos o formato numerado ("01·Cover:") como delimitador.
+  const hasSlideHeaders = lines.some(l => SLIDE_HEADER_RE.test(l.trim()));
   const slides = [];
   let current = null;
   let headerCount = 0;
@@ -56,6 +64,7 @@ function parseSlides(rawContent) {
     if (!trimmed) { if (current && current.text) current.text += '\n'; continue; }
 
     const h = trimmed.match(SLIDE_HEADER_RE);
+    const nh = (!h && !hasSlideHeaders) ? trimmed.match(NUM_HEADER_RE) : null;
     if (h) {
       headerCount++;
       if (current) slides.push(current);
@@ -73,6 +82,41 @@ function parseSlides(rawContent) {
         fontSize: 48,
         isHook: /(SLIDE\s*1\b|CAPA)/.test(label),
         isCTA: /FINAL/.test(label),
+      };
+      continue;
+    }
+
+    // Formato numerado: cada linha "NN<sep> Rótulo: texto" vira um slide.
+    if (nh) {
+      headerCount++;
+      if (current) slides.push(current);
+      const n = parseInt(nh[1], 10);
+      const rest = nh[2].replace(/\*+/g, '').trim();
+      // Rótulo curto antes do ":" (Cover, Setup, Sinal 1, CTA…) — senão "SLIDE N"
+      const colonIdx = rest.indexOf(':');
+      const pre = colonIdx > 0 ? rest.slice(0, colonIdx).trim() : '';
+      let label, body;
+      if (pre && pre.length <= 20 && /^[\p{L}\d][\p{L}\d\s]*$/u.test(pre)) {
+        label = pre.toUpperCase().replace(/\s+/g, ' ');
+        body = rest.slice(colonIdx + 1).trim();
+      } else {
+        label = `SLIDE ${n}`;
+        body = rest;
+      }
+      // Prefere o texto entre aspas (o que aparece no slide) e descarta direções
+      // fora das aspas, ex.: '— tipografia grande, sem foto de comida'.
+      const quoted = [...body.matchAll(/[“"]([^”"]+)[”"]/g)].map(m => m[1].trim()).filter(Boolean);
+      const text = quoted.length ? quoted.join('\n') : body;
+      const isHook = n === 1 || /\b(COVER|CAPA|HOOK)\b/.test(label);
+      const isCTA = /\b(CTA|FINAL)\b/.test(label);
+      current = {
+        label,
+        text,
+        bg: (isHook || isCTA) ? THEME.verde : THEME.bege,
+        textColor: (isHook || isCTA) ? THEME.bege : THEME.verde,
+        fontSize: isHook ? 52 : 40,
+        isHook,
+        isCTA,
       };
       continue;
     }
