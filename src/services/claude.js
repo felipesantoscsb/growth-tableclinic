@@ -277,4 +277,39 @@ Forneça:
   return extractText(msg);
 }
 
-module.exports = { generateContent, generateCarouselContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights };
+// Analisa a performance ORGÂNICA do Instagram (dados reais já filtrados por
+// período) e devolve o que funcionou, a estrutura por trás e próximos passos.
+async function analyzeInstagramPerformance({ period, account, posts }) {
+  const periodoLabel = { week: 'última semana', month: 'último mês', year: 'último ano' }[period] || period || 'período';
+  const top = (Array.isArray(posts) ? posts : []).slice(0, 15).map(p => ({
+    tipo: p.type,
+    legenda: (p.caption || '').slice(0, 160),
+    data: p.timestamp,
+    curtidas: p.likes,
+    comentarios: p.comments,
+    alcance: p.reach,
+    salvamentos: p.saved,
+    compartilhamentos: p.shares,
+    interacoes: p.interactions,
+    taxa_engajamento_pct: p.engagementRate,
+  }));
+
+  const system = 'Você é estrategista de conteúdo de Instagram para o nicho de nutrição comportamental e bem-estar feminino. Analisa dados REAIS de performance orgânica e é específica, evitando generalidades.';
+  const userContent = `Período analisado: ${periodoLabel}
+Conta: ${account ? `@${account.username || '—'} · ${account.followers ?? '—'} seguidores` : '—'}
+Posts no período (ordenados por engajamento):
+${JSON.stringify(top, null, 2)}
+
+Com base SOMENTE nestes dados reais, entregue:
+1. O QUE FUNCIONOU — os posts/formatos de melhor performance e o porquê (olhe tipo de mídia, tema e gancho da legenda).
+2. A ESTRUTURA POR TRÁS — o padrão comum dos que performaram (formato, ângulo, tipo de gancho, tema, tamanho de legenda).
+3. O QUE EVITAR — o que teve baixa performance e a provável razão.
+4. PRÓXIMOS PASSOS — 5 ideias de conteúdo concretas para as próximas semanas, derivadas do que funcionou.
+5. EXPERIMENTO — 1 teste objetivo para validar uma hipótese de crescimento.
+
+Se os dados forem poucos, diga isso e seja cauteloso nas conclusões.`;
+
+  return streamText({ model: MODEL, max_tokens: 2500, system, messages: [{ role: 'user', content: userContent }] });
+}
+
+module.exports = { generateContent, generateCarouselContent, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights, analyzeInstagramPerformance };

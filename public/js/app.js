@@ -934,25 +934,104 @@ async function mercado(el) {
 async function insights(el) {
   el.innerHTML = `
     <div class="page-header"><h1>Performance & Insights</h1></div>
-    <div id="insights-data"></div>
-    <div style="max-width:680px;margin-top:24px">
-      <div class="card">
-        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Análise personalizada</h3>
-        <div class="form-group">
-          <label>Cole dados de performance (JSON ou texto)</label>
-          <textarea id="insights-input" rows="6" placeholder='{"campaigns": [...]} ou cole um resumo de performance...'></textarea>
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">📸 Instagram — performance orgânica</h3>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="ig-period" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
+            <option value="week">Última semana</option>
+            <option value="month" selected>Último mês</option>
+            <option value="year">Último ano</option>
+          </select>
+          <button class="btn btn-accent btn-sm" id="ig-analyze">🤖 Analisar com IA</button>
         </div>
-        <button class="btn btn-accent" id="insights-btn">💡 Analisar com IA</button>
       </div>
-      <div id="insights-result" style="margin-top:16px"></div>
+      <div id="ig-data"><div class="loading"><div class="spinner"></div> Carregando Instagram…</div></div>
     </div>
+
+    <div id="ig-analysis" style="margin-bottom:16px"></div>
+    <div id="insights-data"></div>
   `;
 
+  const igState = { period: 'month', data: null };
+  const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('pt-BR');
+  const typeBadge = t => ({ REELS:'🎬 Reel', VIDEO:'🎬 Vídeo', CAROUSEL_ALBUM:'🎠 Carrossel', IMAGE:'🖼 Imagem', FEED:'🖼 Feed', STORY:'⚡ Story' }[t] || t || 'Post');
+
+  async function loadIG(period) {
+    igState.period = period;
+    const box = document.getElementById('ig-data');
+    box.innerHTML = '<div class="loading"><div class="spinner"></div> Carregando Instagram…</div>';
+    try {
+      const d = await api('GET', `/insights/instagram?period=${period}`);
+      igState.data = d;
+      if (!d.configured) { box.innerHTML = `<p style="color:var(--muted)">${safeHtml(d.message || 'Instagram não configurado.')}</p>`; return; }
+      if (d.error) { box.innerHTML = `<p style="color:#c0392b">Erro do Instagram: ${safeHtml(d.error)}</p>`; return; }
+      const a = d.account || {};
+      const t = d.totals || { posts:0, reach:0, interactions:0 };
+      const posts = d.posts || [];
+      const stat = (label, val) => `<div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center;min-width:90px;flex:1"><div style="font-size:1.3rem;font-family:'Cormorant Garamond',serif">${val}</div><div style="font-size:.7rem;color:var(--muted)">${label}</div></div>`;
+      box.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+          ${a.avatar ? `<img src="${a.avatar}" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover">` : ''}
+          <div><strong>@${safeHtml(a.username || '—')}</strong><div style="font-size:.8rem;color:var(--muted)">${fmt(a.followers)} seguidores · ${fmt(a.mediaCount)} posts</div></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+          ${stat('posts no período', fmt(t.posts))}
+          ${stat('alcance somado', fmt(t.reach))}
+          ${stat('interações', fmt(t.interactions))}
+        </div>
+        ${posts.length ? `
+          <div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Top posts por engajamento</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${posts.slice(0,10).map(p=>`
+              <div style="display:flex;gap:10px;align-items:center;background:var(--bege);border-radius:8px;padding:10px">
+                ${p.thumbnail ? `<img src="${p.thumbnail}" alt="" style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${typeBadge(p.type)} · ${safeHtml(p.caption || '(sem legenda)')}</div>
+                  <div style="font-size:.72rem;color:var(--muted)">❤️ ${fmt(p.likes)} · 💬 ${fmt(p.comments)}${p.reach!==null?` · 👁 ${fmt(p.reach)}`:''}${p.saved!==null?` · 🔖 ${fmt(p.saved)}`:''}${p.engagementRate!==null?` · ${p.engagementRate}%`:''}</div>
+                </div>
+                ${p.permalink ? `<a href="${p.permalink}" target="_blank" style="color:var(--terracota);font-size:.8rem;flex-shrink:0">abrir ↗</a>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        ` : '<p style="color:var(--muted)">Nenhum post no período selecionado.</p>'}
+      `;
+    } catch (e) {
+      box.innerHTML = `<p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p>`;
+    }
+  }
+
+  el.querySelector('#ig-period').addEventListener('change', e => loadIG(e.target.value));
+
+  el.querySelector('#ig-analyze').addEventListener('click', async () => {
+    const d = igState.data;
+    if (!d || !d.configured) { toast('Configure o Instagram primeiro', 'error'); return; }
+    if (!d.posts || !d.posts.length) { toast('Sem posts no período para analisar', 'error'); return; }
+    const btn = el.querySelector('#ig-analyze');
+    btn.disabled = true; btn.textContent = '⏳ Analisando…';
+    const out = document.getElementById('ig-analysis');
+    out.innerHTML = '<div class="card"><div class="loading"><div class="spinner"></div> A IA está analisando a performance…</div></div>';
+    try {
+      const r = await api('POST', '/insights/analyze', { period: d.period, account: d.account, posts: d.posts });
+      out.innerHTML = `<div class="card"><h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Análise da IA · ${igState.period === 'week' ? 'última semana' : igState.period === 'year' ? 'último ano' : 'último mês'}</h3><div class="ai-output">${safeHtml(r.analysis)}</div></div>`;
+      toast('Análise gerada!');
+    } catch (e) {
+      out.innerHTML = `<div class="card"><p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p></div>`;
+      toast(e.message, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = '🤖 Analisar com IA';
+    }
+  });
+
+  loadIG('month');
+
+  // Meta Ads — seção secundária (mantida)
   try {
     const data = await api('GET', '/insights');
     const container = document.getElementById('insights-data');
-    if (data.data) {
-      const campaigns = data.data || [];
+    const campaigns = data.data || [];
+    if (campaigns.length) {
       container.innerHTML = `
         <div class="card" style="margin-bottom:16px">
           <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Campanhas Meta Ads</h3>
@@ -964,34 +1043,11 @@ async function insights(el) {
               </div>
             `).join('')}
           </div>
-        </div>
-      `;
+        </div>`;
     } else {
-      container.innerHTML = `<div class="card" style="margin-bottom:16px"><p style="color:var(--muted)">${data.message || 'Configure META_ADS_ACCESS_TOKEN para ver dados de campanhas.'}</p></div>`;
+      container.innerHTML = `<div class="card"><p style="color:var(--muted)">${safeHtml(data.message || 'Configure META_ADS_ACCESS_TOKEN para ver campanhas.')}</p></div>`;
     }
   } catch {}
-
-  el.querySelector('#insights-btn').addEventListener('click', async () => {
-    const raw = el.querySelector('#insights-input').value.trim();
-    if (!raw) { toast('Cole dados de performance', 'error'); return; }
-    const btn = el.querySelector('#insights-btn');
-    btn.disabled = true; btn.textContent = '⏳ Analisando...';
-    const result = document.getElementById('insights-result');
-    result.innerHTML = '<div class="loading"><div class="spinner"></div> Analisando performance...</div>';
-
-    try {
-      let campaignData;
-      try { campaignData = JSON.parse(raw); } catch { campaignData = { raw }; }
-      const data = await api('POST', '/insights/suggest', { campaignData });
-      result.innerHTML = `<div class="card"><div class="ai-output">${safeHtml(data.analysis)}</div></div>`;
-      toast('Análise gerada!');
-    } catch (err) {
-      result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
-      toast(err.message, 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = '💡 Analisar com IA';
-    }
-  });
 }
 
 // ── Admin ──────────────────────────────────────────────
