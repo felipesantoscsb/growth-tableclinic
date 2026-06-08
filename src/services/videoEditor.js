@@ -138,10 +138,12 @@ function parseInstructions(instructions, duration) {
     grayscale: false,
   };
 
-  const text = instructions.toLowerCase();
+  // Normaliza acentos: "silêncios"/"silencios", "áudio"/"audio" etc. viram a
+  // mesma coisa — usuários frequentemente digitam sem acento.
+  const text = instructions.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
 
-  const trimMatch = text.match(/(?:cortar?|trim|a partir d[eo]|começa?r?\s+em?|do segundo)\s+(\d+)/i)
-    || text.match(/(\d+)s?\s+(?:a[oté]+|até\s+o\s+segundo|–|-)\s+(\d+)/i);
+  const trimMatch = text.match(/(?:cortar?|trim|a partir d[eo]|comeca?r?\s+em?|do segundo)\s+(\d+)/i)
+    || text.match(/(\d+)s?\s+(?:a[ote]+|ate\s+o\s+segundo|–|-)\s+(\d+)/i);
   if (trimMatch) {
     if (trimMatch[2]) {
       ops.trim = { start: parseFloat(trimMatch[1]), end: parseFloat(trimMatch[2]) };
@@ -161,13 +163,16 @@ function parseInstructions(instructions, duration) {
   else if (text.match(/16[:/]9|horizontal|paisagem|widescreen/)) ops.resize = '16:9';
 
   if (text.match(/legend[as]|caption|subtitle|srt/)) ops.subtitles = true;
-  if (text.match(/paus[as]|silênci[oa]|silence|cortar\s+paus/i)) ops.removeSilence = true;
+  // Remoção de pausas reage ao SUBSTANTIVO "silêncio(s)" (lacunas sem fala)
+  if (text.match(/paus[as]|silencio|silence|cortar\s+paus/i)) ops.removeSilence = true;
 
   const speedMatch = text.match(/(\d+(?:\.\d+)?)[x×]\s*(?:velocidade|speed)/i)
     || text.match(/velocidade\s+(\d+(?:\.\d+)?)/i);
   if (speedMatch) ops.speed = Math.min(2.0, Math.max(0.5, parseFloat(speedMatch[1])));
 
-  if (text.match(/sem\s+(?:áudio|som)|mudo|mute|silenci/i)) ops.mute = true;
+  // Mute reage ao VERBO "silenciar/silencie" (não ao substantivo "silêncio",
+  // que é remoção de pausas) — evita que "cortar os silêncios" tire todo o áudio.
+  if (text.match(/sem\s+(?:audio|som)|(?:tirar|remover)\s+(?:o\s+)?(?:audio|som)|mudo|mute|silenci[ae]/i)) ops.mute = true;
   else {
     const volMatch = text.match(/volume[:\s]+(\d+)%/i);
     if (volMatch) ops.volume = parseFloat(volMatch[1]) / 100;
@@ -343,7 +348,11 @@ function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) 
     // Escapa o caminho para o filtro subtitles do ffmpeg
     const escaped = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
     // Fontname precisa existir na imagem — o Dockerfile instala fonts-liberation
-    const style = "force_style='Fontname=Liberation Sans,Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=50'";
+    // Sans em negrito p/ máxima leitura em vídeo (a ID visual usa Cormorant só
+    // em título/capa — serif fino não lê bem em legenda sobre imagem).
+    // Fontsize é relativo à altura de script do libass (~288), então 12 ≈ 4% da
+    // altura do vídeo — legível sem ficar gigante em vídeos verticais (1080×1920).
+    const style = "force_style='Fontname=Liberation Sans,Fontsize=12,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=40'";
     const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
     ffmpeg(inputPath)
       .videoFilters(`subtitles='${escaped}':${style}`)
