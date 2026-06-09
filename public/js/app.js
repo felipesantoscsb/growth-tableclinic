@@ -785,7 +785,7 @@ async function edicao(el) {
         <div class="form-group">
           <label>Instruções em linguagem natural <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
           <textarea id="video-instructions" rows="5" placeholder="Ex: Adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
-          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Deixe em branco e ele já faz o <strong>corte natural de pausas</strong> automaticamente (mantém o ritmo da fala, sem jump cut).</p>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Deixe em branco e ele já faz <strong>corte natural de pausas + legendas inteligentes</strong> automaticamente (ritmo preservado; legenda ≤7 palavras, no terço inferior).</p>
         </div>
         <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
       </div>

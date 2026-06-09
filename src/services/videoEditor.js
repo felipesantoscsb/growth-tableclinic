@@ -299,6 +299,64 @@ function cleanSrtHallucinations(srt) {
   return kept.map((c, i) => `${i + 1}\n${c.timeLine}\n${c.textLines.join('\n')}`).join('\n\n') + '\n';
 }
 
+// Legendas inteligentes — regras de exibição
+const CAP_MAX_WORDS = 7;     // máx. palavras por legenda
+const CAP_MIN_S = 0.8;       // tempo mínimo de exibição
+const CAP_MAX_S = 3.5;       // tempo máximo de exibição
+const CAP_GAP_S = 0.05;      // folga mínima entre legendas
+
+function secToSrtTime(s) {
+  s = Math.max(0, s);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const ms = Math.round((s - Math.floor(s)) * 1000);
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return `${p(h)}:${p(m)}:${p(sec)},${p(ms, 3)}`;
+}
+
+// Agrupa palavras (com timestamp) em legendas inteligentes: ≤7 palavras, quebra
+// em unidade de sentido (pontuação), 800–3500ms, sincronizadas na 1ª palavra.
+function buildCaptionSrt(words) {
+  const ws = (Array.isArray(words) ? words : [])
+    .map(w => ({ text: String(w.word ?? w.text ?? '').trim(), start: Number(w.start), end: Number(w.end) }))
+    .filter(w => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
+  if (ws.length === 0) return '';
+
+  const cues = [];
+  let cur = [];
+  const flush = () => { if (cur.length) { cues.push(cur); cur = []; } };
+
+  for (const w of ws) {
+    cur.push(w);
+    const endsSentence = /[.!?…]$/.test(w.text);
+    const dur = w.end - cur[0].start;
+    if (endsSentence) { flush(); continue; }
+    if (cur.length >= CAP_MAX_WORDS || dur >= CAP_MAX_S) {
+      // prefere quebrar na última vírgula/cláusula da janela (unidade de sentido)
+      let idx = -1;
+      for (let i = cur.length - 2; i >= 1; i--) { if (/[,;:]$/.test(cur[i].text)) { idx = i; break; } }
+      if (idx >= 1) { const rest = cur.slice(idx + 1); cues.push(cur.slice(0, idx + 1)); cur = rest; }
+      else flush();
+    }
+  }
+  flush();
+
+  const blocks = [];
+  for (let i = 0; i < cues.length; i++) {
+    const c = cues[i];
+    const start = c[0].start;
+    let end = c[c.length - 1].end;
+    if (end - start > CAP_MAX_S) end = start + CAP_MAX_S;        // teto
+    if (end - start < CAP_MIN_S) end = start + CAP_MIN_S;        // piso
+    const nextStart = cues[i + 1] ? cues[i + 1][0].start : Infinity;
+    if (end > nextStart - CAP_GAP_S) end = Math.max(start + 0.3, nextStart - CAP_GAP_S); // sem sobrepor
+    const text = c.map(w => w.text).join(' ');
+    blocks.push(`${i + 1}\n${secToSrtTime(start)} --> ${secToSrtTime(end)}\n${text}`);
+  }
+  return blocks.length ? blocks.join('\n\n') + '\n' : '';
+}
+
 async function transcribeToSrt(videoPath, sessionDir) {
   const openai = getOpenAI();
   if (!openai) throw new Error('Legendas exigem OPENAI_API_KEY configurada no ambiente');
@@ -320,16 +378,22 @@ async function transcribeToSrt(videoPath, sessionDir) {
       .run();
   });
 
-  const srt = await openai.audio.transcriptions.create({
+  // Timestamp por palavra (verbose_json) → permite legendas inteligentes
+  // (≤7 palavras, quebra por sentido, sincronizadas). Transcrição roda no
+  // arquivo JÁ editado, então os tempos já estão no timeline final.
+  const resp = await openai.audio.transcriptions.create({
     file: fs.createReadStream(audioPath),
     model: process.env.WHISPER_MODEL || 'whisper-1',
-    response_format: 'srt',
+    response_format: 'verbose_json',
+    timestamp_granularities: ['word'],
     language: 'pt',
   });
 
+  const srt = buildCaptionSrt(resp && Array.isArray(resp.words) ? resp.words : []);
+
   // Filtra alucinações do Whisper (Amara.org etc.). Se não sobrar legenda real,
   // é áudio sem fala — falha de propósito para entregar o vídeo sem legenda.
-  const cleaned = cleanSrtHallucinations(typeof srt === 'string' ? srt : String(srt));
+  const cleaned = cleanSrtHallucinations(srt);
   if (!cleaned.trim())
     throw new Error('transcrição vazia ou só com ruído (áudio sem fala) — vídeo entregue sem legenda');
 
@@ -457,10 +521,11 @@ async function editVideo({ video_url, instructions, cardId }) {
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  // Sem instruções → roda o padrão: corte natural de pausas. Com instruções, segue o pedido.
+  // Sem instruções → roda o padrão: corte natural + legendas inteligentes.
+  // Com instruções, segue o pedido. (Sem fala/áudio, a legenda é pulada com aviso.)
   const ops = (instructions && instructions.trim())
     ? parseInstructions(instructions, duration)
-    : { trim: null, resize: null, subtitles: false, removeSilence: true, speed: null, volume: null, mute: false, grayscale: false };
+    : { trim: null, resize: null, subtitles: true, removeSilence: true, speed: null, volume: null, mute: false, grayscale: false };
   const outputPath = path.join(sessionDir, 'output.mp4');
 
   // Passo 1 (opcional): remoção de silêncios → intermediário
