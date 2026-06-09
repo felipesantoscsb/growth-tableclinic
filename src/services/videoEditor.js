@@ -183,13 +183,18 @@ function parseInstructions(instructions, duration) {
   return ops;
 }
 
+// Corte de pausas (Fase 1): só corta pausas LONGAS e deixa um respiro, em vez de
+// remover tudo pra zero (que gera jump cut e mata o ritmo da fala).
+const SILENCE_MIN_S = 1.2;  // só corta silêncio acima disso (preserva respiração/ênfase ≤1s)
+const KEEP_PAUSE_S = 0.4;   // ao cortar, mantém 400ms de pausa (não corta pra zero)
+
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
   return new Promise((resolve, reject) => {
     const silences = [];
     let stderr = '';
     ffmpeg(inputPath)
-      .audioFilters('silencedetect=noise=-35dB:d=0.5')
+      .audioFilters(`silencedetect=noise=-35dB:d=${SILENCE_MIN_S}`)
       .outputOptions(['-f null'])
       .output('/dev/null')
       .on('stderr', line => {
@@ -206,16 +211,20 @@ function detectSilenceSegments(inputPath) {
   });
 }
 
-// Constrói filtro FFmpeg para remover segmentos de silêncio
+// Constrói filtro FFmpeg encurtando cada pausa longa para KEEP_PAUSE_S (deixando
+// metade do respiro de cada lado), em vez de removê-la por completo.
 function buildSilenceRemoveFilter(silences, duration) {
-  // Constrói lista de segmentos de fala
+  const half = KEEP_PAUSE_S / 2;
   const speechSegments = [];
   let cursor = 0;
   for (const s of silences) {
     const start = s.start ?? 0;
     const end   = s.end   ?? duration;
-    if (start > cursor + 0.1) speechSegments.push({ start: cursor, end: start });
-    cursor = end;
+    // mantém ~half após a última palavra (respiração natural)
+    const segEnd = Math.min(start + half, end);
+    if (segEnd > cursor + 0.1) speechSegments.push({ start: cursor, end: segEnd });
+    // próximo trecho começa ~half antes da próxima palavra → sobra KEEP_PAUSE_S de pausa
+    cursor = Math.max(end - half, segEnd);
   }
   if (cursor < duration - 0.1) speechSegments.push({ start: cursor, end: duration });
   if (speechSegments.length === 0) return null;
@@ -441,7 +450,10 @@ async function editVideo({ video_url, instructions, cardId }) {
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  const ops = parseInstructions(instructions, duration);
+  // Sem instruções → roda o padrão: corte natural de pausas. Com instruções, segue o pedido.
+  const ops = (instructions && instructions.trim())
+    ? parseInstructions(instructions, duration)
+    : { trim: null, resize: null, subtitles: false, removeSilence: true, speed: null, volume: null, mute: false, grayscale: false };
   const outputPath = path.join(sessionDir, 'output.mp4');
 
   // Passo 1 (opcional): remoção de silêncios → intermediário

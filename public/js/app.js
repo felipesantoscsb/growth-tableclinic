@@ -783,8 +783,9 @@ async function edicao(el) {
           <input id="video-url" placeholder="https://seu-bucket.s3.amazonaws.com/video.mp4">
         </div>
         <div class="form-group">
-          <label>Instruções em linguagem natural</label>
-          <textarea id="video-instructions" rows="5" placeholder="Ex: Remover pausas e silêncios, adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
+          <label>Instruções em linguagem natural <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+          <textarea id="video-instructions" rows="5" placeholder="Ex: Adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Deixe em branco e ele já faz o <strong>corte natural de pausas</strong> automaticamente (mantém o ritmo da fala, sem jump cut).</p>
         </div>
         <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
       </div>
@@ -804,7 +805,7 @@ async function edicao(el) {
   el.querySelector('#edit-btn').addEventListener('click', async () => {
     const video_url = el.querySelector('#video-url').value.trim();
     const instructions = el.querySelector('#video-instructions').value.trim();
-    if (!video_url || !instructions) { toast('Preencha URL e instruções', 'error'); return; }
+    if (!video_url) { toast('Informe a URL do vídeo', 'error'); return; }
     const btn = el.querySelector('#edit-btn');
     btn.disabled = true; btn.textContent = '⏳ Processando...';
     const result = document.getElementById('edit-result');

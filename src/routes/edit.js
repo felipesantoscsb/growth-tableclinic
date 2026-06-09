@@ -28,9 +28,10 @@ router.use(authMiddleware);
 router.post('/video', async (req, res) => {
   try {
     const { video_url, instructions, card_id } = req.body;
-    if (!video_url || !instructions) return fail(res, 'video_url e instructions obrigatórios', 400);
+    if (!video_url) return fail(res, 'video_url obrigatório', 400);
 
-    const result = await editVideo({ video_url, instructions, cardId: card_id || req.user.id });
+    // instructions é opcional: sem ela, o editor roda o corte natural padrão
+    const result = await editVideo({ video_url, instructions: instructions || '', cardId: card_id || req.user.id });
 
     ok(res, {
       duration_original: result.duration_original,
