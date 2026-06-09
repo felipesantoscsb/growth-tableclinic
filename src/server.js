@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 
@@ -11,7 +12,8 @@ app.set('trust proxy', 1); // Railway / Heroku / qualquer proxy reverso
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, '../public')));
+// index:false → "/" não serve index.html direto; cai no fallback que versiona os assets
+app.use(express.static(path.join(__dirname, '../public'), { index: false }));
 
 const generalLimiter = rateLimit({
   windowMs: 60_000,
@@ -64,9 +66,21 @@ app.use('/api/insights', require('./routes/insights'));
 app.use('/api/edit', require('./routes/edit'));
 app.use('/api/users', require('./routes/users'));
 
-// SPA fallback — serve index.html for all non-API routes
+// Cache-busting: injeta a versão (mtime) de app.js/style.css nas URLs dos assets.
+// Cada deploy muda o mtime → a URL muda → navegador/CDN não servem versão velha.
+const PUBLIC_DIR = path.join(__dirname, '../public');
+const assetVer = rel => {
+  try { return Math.floor(fs.statSync(path.join(PUBLIC_DIR, rel)).mtimeMs).toString(36); }
+  catch { return Date.now().toString(36); }
+};
+const INDEX_HTML = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
+  .replace('/js/app.js', `/js/app.js?v=${assetVer('js/app.js')}`)
+  .replace('/css/style.css', `/css/style.css?v=${assetVer('css/style.css')}`);
+
+// SPA fallback — serve o index.html (versionado), sempre revalidado (no-cache)
 app.get(/^(?!\/api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(INDEX_HTML);
 });
 
 app.use((err, req, res, _next) => {
