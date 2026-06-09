@@ -394,9 +394,12 @@ function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) 
     // Fontname precisa existir na imagem — o Dockerfile instala fonts-liberation
     // Sans em negrito p/ máxima leitura em vídeo (a ID visual usa Cormorant só
     // em título/capa — serif fino não lê bem em legenda sobre imagem).
-    // Fontsize é relativo à altura de script do libass (~288), então 12 ≈ 4% da
-    // altura do vídeo — legível sem ficar gigante em vídeos verticais (1080×1920).
-    const style = "force_style='Fontname=Liberation Sans,Fontsize=12,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginV=40'";
+    // Fontsize relativo à altura de script do libass (~288): 10 ≈ 3.3% da altura.
+    // Cor creme #F8F4EE → ASS é &HAABBGGRR (BGR!) → &H00EEF4F8.
+    // MarginV=110 sobe a legenda do rodapé; MarginL/R=70 confinam num bloco central
+    // estreito — assim ela fica centralizada e sai de trás dos botões (direita) e
+    // da legenda/handle (rodapé) do Instagram.
+    const style = "force_style='Fontname=Liberation Sans,Fontsize=10,Bold=1,PrimaryColour=&H00EEF4F8,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginL=70,MarginR=70,MarginV=110'";
     const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
     ffmpeg(inputPath)
       .videoFilters(`subtitles='${escaped}':${style}`)
