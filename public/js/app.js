@@ -52,7 +52,16 @@ async function api(method, path, body) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const json = await res.json();
+  // Respostas não-JSON (ex.: "upstream error" / 502/504 do proxy quando a
+  // requisição demora demais) não devem virar "Unexpected token..." crípticos.
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    if ([502, 503, 504].includes(res.status))
+      throw new Error('O servidor demorou demais (tempo limite do proxy). Tente novamente.');
+    throw new Error(`Resposta inválida do servidor (HTTP ${res.status}).`);
+  }
   if (!json.success) throw new Error(json.error || 'Erro desconhecido');
   return json.data;
 }
@@ -812,7 +821,28 @@ async function edicao(el) {
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo com FFmpeg… pode levar alguns segundos.</div>';
 
     try {
-      const data = await api('POST', '/edit/video', { video_url, instructions });
+      // Edição é assíncrona: inicia o job e consulta o progresso (evita o timeout
+      // do proxy em vídeos maiores).
+      const start = await api('POST', '/edit/video', { video_url, instructions });
+      const jobId = start.job_id;
+      result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo… pode levar de alguns segundos a alguns minutos.</div>';
+
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const deadline = Date.now() + 10 * 60 * 1000; // teto de 10 min
+      let data = null;
+      while (!data) {
+        await sleep(3500);
+        if (Date.now() > deadline) throw new Error('A edição está demorando muito — tente um vídeo menor.');
+        let s;
+        try {
+          s = await api('GET', `/edit/status/${jobId}`);
+        } catch (e) {
+          if (/encontrada|expirada/i.test(e.message)) throw e; // job sumiu (ex.: restart do servidor)
+          continue; // erro transitório → tenta de novo no próximo ciclo
+        }
+        if (s.status === 'error') throw new Error(s.error || 'Falha na edição');
+        if (s.status === 'done') data = s;
+      }
 
       // Ops aplicadas em formato legível
       const ops = data.ops_applied || {};
