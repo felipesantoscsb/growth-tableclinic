@@ -288,19 +288,6 @@ function buildSlideHtml(slide, index, total, photoPath) {
     opacity: 0.78;
     margin-top: 28px;
   }
-  ${slide.isCTA ? `
-  .cta-tag {
-    display: inline-block;
-    margin-top: 32px;
-    padding: 10px 28px;
-    border: 1.5px solid ${slide.textColor};
-    border-radius: 40px;
-    font-family: 'Jost', sans-serif;
-    font-size: 16px;
-    font-weight: 500;
-    letter-spacing: 1px;
-    opacity: 0.85;
-  }` : ''}
 </style>
 </head>
 <body>
@@ -312,7 +299,6 @@ function buildSlideHtml(slide, index, total, photoPath) {
     ${slide.label ? `<div class="label">${esc(slide.label)}</div>` : ''}
     ${textLines}
     ${slide.signature ? `<div class="signature">${esc(slide.signature)}</div>` : ''}
-    ${slide.isCTA ? `<div class="cta-tag">Salve para não esquecer ✦</div>` : ''}
   </div>
 </body>
 </html>`;
