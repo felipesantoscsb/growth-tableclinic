@@ -70,7 +70,8 @@ nav#sidebar ul li a.active {
   color: var(--bege);
 }
 
-nav#sidebar ul li a .icon { font-size: 1rem; width: 20px; }
+nav#sidebar ul li a .icon { width: 20px; display: inline-flex; align-items: center; justify-content: center; }
+nav#sidebar ul li a .icon svg { width: 18px; height: 18px; }
 
 nav#sidebar .user-info {
   padding: 16px 24px;

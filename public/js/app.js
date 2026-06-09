@@ -18,7 +18,7 @@ function renderCardContentHtml(content) {
     if (d && Array.isArray(d.slides)) {
       const slidesHtml = d.slides.map((s, i) => {
         // índice apenas para leitura (não é rótulo do slide); título só se houver
-        const tags = [s.title ? `“${s.title}”` : null, s.photo ? '📷 foto' : null, s.bg ? `🎨 ${s.bg}` : null, s.signature ? '✍️ assinatura' : null].filter(Boolean).join(' · ');
+        const tags = [s.title ? `“${s.title}”` : null, s.photo ? 'foto' : null, s.bg ? `${s.bg}` : null, s.signature ? 'assinatura' : null].filter(Boolean).join(' · ');
         return `<div style="margin-bottom:12px">
           <div style="font-size:.68rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase">${i + 1}${tags ? ` · ${safeHtml(tags)}` : ''}</div>
           <div>${safeHtml(s.text)}</div>
@@ -101,15 +101,17 @@ const ROLE_MENUS = {
   nutri:  ['gerador','repurposing','edicao'],
 };
 
+// Ícones de linha (SVG) monocromáticos — herdam a cor do texto (currentColor)
+const SVG = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 const MENU_LABELS = {
-  calendario:  { icon: '📅', label: 'Calendário' },
-  gerador:     { icon: '✨', label: 'Gerador' },
-  anuncios:    { icon: '📣', label: 'Anúncios' },
-  repurposing: { icon: '♻️', label: 'Repurposing' },
-  edicao:      { icon: '🎬', label: 'Edição' },
-  mercado:     { icon: '📊', label: 'Mercado' },
-  insights:    { icon: '💡', label: 'Insights' },
-  admin:       { icon: '⚙️', label: 'Admin' },
+  calendario:  { icon: SVG('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>'), label: 'Calendário' },
+  gerador:     { icon: SVG('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 14.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>'), label: 'Gerador' },
+  anuncios:    { icon: SVG('<path d="M3 11 21 6v12L3 13z"/><path d="M11.5 16.7a3 3 0 1 1-5.7-1.6"/>'), label: 'Anúncios' },
+  repurposing: { icon: SVG('<path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'), label: 'Repurposing' },
+  edicao:      { icon: SVG('<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 12h20M2 7.5h5M2 16.5h5M17 7.5h5M17 16.5h5"/>'), label: 'Edição' },
+  mercado:     { icon: SVG('<path d="M18 20V10M12 20V4M6 20v-6"/>'), label: 'Mercado' },
+  insights:    { icon: SVG('<path d="M9 18h6M10 22h4"/><path d="M15.1 14c.2-1 .7-1.8 1.4-2.5A4.65 4.65 0 0 0 18 8 6 6 0 1 0 6.5 11.5c.7.7 1.2 1.5 1.4 2.5"/>'), label: 'Insights' },
+  admin:       { icon: SVG('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'), label: 'Admin' },
 };
 
 function canAccess(page) {
@@ -376,13 +378,13 @@ function openCardDetail(card) {
     <button class="modal-close">×</button>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
       ${badgePilar(card.pilar)} ${badgeFormat(card.format)} ${badgeStatus(card.status)}
-      ${card.generated_by_ai ? '<span class="badge" style="background:#f0e8ff;color:#5a2d9a">✨ IA</span>' : ''}
+      ${card.generated_by_ai ? '<span class="badge" style="background:#f0e8ff;color:#5a2d9a">IA</span>' : ''}
     </div>
     <h2>${safeHtml(card.title)}</h2>
     <p style="color:var(--muted);font-size:.85rem;margin-bottom:16px">
       Responsável: ${card.responsible_name || '—'} · Publicação: ${formatDate(card.publish_date)}
     </p>
-    ${card.drive_link ? `<p style="margin-bottom:12px"><a href="${card.drive_link}" target="_blank" style="color:var(--terracota)">🔗 Drive</a></p>` : ''}
+    ${card.drive_link ? `<p style="margin-bottom:12px"><a href="${card.drive_link}" target="_blank" style="color:var(--terracota)">Drive</a></p>` : ''}
     ${card.content ? `<div class="ai-output">${renderCardContentHtml(card.content)}</div>` : '<p style="color:var(--muted)">Sem roteiro ainda.</p>'}
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center">
       <select id="status-select" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
@@ -390,7 +392,7 @@ function openCardDetail(card) {
       </select>
       <button class="btn btn-primary btn-sm" id="save-status">Atualizar status</button>
       ${['carrossel','carrossel_video'].includes(card.format) && card.content
-        ? `<button class="btn btn-accent btn-sm" id="gen-carousel-btn">🎨 Gerar slides PNG</button>`
+        ? `<button class="btn btn-accent btn-sm" id="gen-carousel-btn">Gerar slides PNG</button>`
         : ''}
     </div>
     <div id="carousel-result" style="margin-top:12px"></div>
@@ -409,14 +411,14 @@ function openCardDetail(card) {
     const btn = overlay.querySelector('#gen-carousel-btn');
     const resultEl = overlay.querySelector('#carousel-result');
     btn.disabled = true;
-    btn.textContent = '⏳ Gerando slides...';
+    btn.textContent = 'Gerando slides...';
     resultEl.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
     try {
       const data = await api('POST', `/cards/${card.id}/carousel`);
       resultEl.innerHTML = `
         <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
-          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+          <span style="font-size:.9rem"><strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">Baixar ZIP</a>
         </div>
       `;
       toast(`${data.slides} slides prontos!`);
@@ -425,7 +427,7 @@ function openCardDetail(card) {
       toast(e.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '🎨 Gerar slides PNG';
+      btn.textContent = 'Gerar slides PNG';
     }
   });
 }
@@ -502,7 +504,7 @@ async function gerador(el) {
         <!-- Campos extras para carrossel — visíveis apenas quando formato é carrossel -->
         <div id="carousel-extras" style="display:none">
           <div style="background:var(--bege);border-radius:8px;padding:14px;margin-bottom:14px">
-            <p style="font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:10px">🎨 Opções de Carrossel</p>
+            <p style="font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:10px">Opções de Carrossel</p>
 
             <div class="form-group" style="margin-bottom:10px">
               <label style="font-size:.85rem">Modo</label>
@@ -530,7 +532,7 @@ async function gerador(el) {
           </div>
         </div>
 
-        <button type="submit" class="btn btn-accent btn-full" id="gen-submit-btn">✨ Gerar com IA</button>
+        <button type="submit" class="btn btn-accent btn-full" id="gen-submit-btn">Gerar com IA</button>
       </form>
     </div>
     <div id="gen-result" style="max-width:680px;margin-top:20px"></div>
@@ -547,11 +549,11 @@ async function gerador(el) {
     carouselExtras.style.display = isCarousel ? 'block' : 'none';
     const mode = el.querySelector('input[name="carousel_mode"]:checked')?.value || 'ai';
     if (isCarousel && mode === 'direct') {
-      submitBtn.textContent = '🎨 Gerar slides PNG';
+      submitBtn.textContent = 'Gerar slides PNG';
       directField.style.display = 'block';
       el.querySelector('#gen-briefing').required = false;
     } else {
-      submitBtn.textContent = '✨ Gerar com IA';
+      submitBtn.textContent = 'Gerar com IA';
       directField.style.display = 'none';
       el.querySelector('#gen-briefing').required = true;
     }
@@ -564,7 +566,7 @@ async function gerador(el) {
   function renderCarouselResult(resultEl, cardId, driveFolderUrl) {
     return `
       <div style="margin-top:14px;border-top:1px solid var(--bege);padding-top:14px">
-        <button class="btn btn-accent btn-sm" id="inline-carousel-btn">🎨 Gerar slides PNG</button>
+        <button class="btn btn-accent btn-sm" id="inline-carousel-btn">Gerar slides PNG</button>
         <div id="inline-carousel-result" style="margin-top:10px"></div>
       </div>`;
   }
@@ -574,15 +576,15 @@ async function gerador(el) {
     if (!btn) return;
     btn.addEventListener('click', async () => {
       btn.disabled = true;
-      btn.textContent = '⏳ Gerando slides...';
+      btn.textContent = 'Gerando slides...';
       const slideResult = resultEl.querySelector('#inline-carousel-result');
       slideResult.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
       try {
         const data = await api('POST', `/cards/${cardId}/carousel`, driveFolderUrl ? { drive_folder_url: driveFolderUrl } : undefined);
         slideResult.innerHTML = `
           <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
-            <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+            <span style="font-size:.9rem"><strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+            <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">Baixar ZIP</a>
           </div>`;
         toast(`${data.slides} slides prontos!`);
       } catch (e) {
@@ -590,7 +592,7 @@ async function gerador(el) {
         toast(e.message, 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = '🎨 Gerar slides PNG';
+        btn.textContent = 'Gerar slides PNG';
       }
     });
   }
@@ -609,15 +611,15 @@ async function gerador(el) {
     if (isCarousel && mode === 'direct') {
       const content = el.querySelector('#direct-slides-content').value.trim();
       if (!content) { toast('Cole o conteúdo dos slides', 'error'); btn.disabled = false; return; }
-      btn.textContent = '⏳ Gerando slides...';
+      btn.textContent = 'Gerando slides...';
       result.innerHTML = '<div class="loading"><div class="spinner"></div> Renderizando slides via Puppeteer...</div>';
       try {
         const data = await api('POST', '/cards/carousel-direct', { content, drive_folder_url: driveFolderUrl });
         result.innerHTML = `
           <div class="card">
             <div style="background:var(--bege);border-radius:8px;padding:14px;display:flex;align-items:center;justify-content:space-between">
-              <span style="font-size:.9rem">✅ <strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
-              <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">⬇ Baixar ZIP</a>
+              <span style="font-size:.9rem"><strong>${data.slides} slides</strong> gerados (1080×1080px, 2×)</span>
+              <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-sm">Baixar ZIP</a>
             </div>
           </div>`;
         toast(`${data.slides} slides prontos!`);
@@ -626,7 +628,7 @@ async function gerador(el) {
         toast(err.message, 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = '🎨 Gerar slides PNG';
+        btn.textContent = 'Gerar slides PNG';
       }
       return;
     }
@@ -634,7 +636,7 @@ async function gerador(el) {
     // Modo IA (padrão)
     const fd = new FormData(e.target);
     const body = Object.fromEntries(fd.entries());
-    btn.textContent = '⏳ Gerando...';
+    btn.textContent = 'Gerando...';
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Gerando conteúdo com IA...</div>';
     try {
       const card = await api('POST', '/generate/content', body);
@@ -642,7 +644,7 @@ async function gerador(el) {
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
             <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">Conteúdo gerado</h3>
-            <span class="badge" style="background:#f0e8ff;color:#5a2d9a">✨ IA · salvo como roteiro</span>
+            <span class="badge" style="background:#f0e8ff;color:#5a2d9a">IA · salvo como roteiro</span>
           </div>
           <div class="ai-output">${safeHtml(card.content) || '(sem conteúdo)'}</div>
           <p style="color:var(--muted);font-size:.8rem;margin-top:10px">Card #${card.id} salvo no calendário como rascunho.</p>
@@ -656,7 +658,7 @@ async function gerador(el) {
       toast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = isCarousel ? '🎨 Gerar slides PNG' : '✨ Gerar com IA';
+      btn.textContent = isCarousel ? 'Gerar slides PNG' : 'Gerar com IA';
     }
   });
 }
@@ -677,7 +679,7 @@ async function anuncios(el) {
           <div class="form-group"><label>Público-alvo</label>
             <textarea name="audience" rows="3" placeholder="Ex: Mulheres 30-50 anos que sofrem com compulsão alimentar e já tentaram dietas..." required></textarea>
           </div>
-          <button type="submit" class="btn btn-accent btn-full">📣 Gerar Copies</button>
+          <button type="submit" class="btn btn-accent btn-full">Gerar Copies</button>
         </form>
       </div>
       <div id="ads-result"></div>
@@ -704,7 +706,7 @@ async function anuncios(el) {
   el.querySelector('#ads-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = e.target.querySelector('button');
-    btn.disabled = true; btn.textContent = '⏳ Gerando...';
+    btn.disabled = true; btn.textContent = 'Gerando...';
     const result = document.getElementById('ads-result');
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Gerando variações...</div>';
 
@@ -732,7 +734,7 @@ async function anuncios(el) {
       result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '📣 Gerar Copies';
+      btn.disabled = false; btn.textContent = 'Gerar Copies';
     }
   });
 
@@ -749,7 +751,7 @@ async function repurposing(el) {
           <label>Cole a transcrição ou conteúdo longo</label>
           <textarea id="transcricao" rows="10" placeholder="Cole aqui o texto da live, do podcast, do artigo ou da aula..." style="width:100%"></textarea>
         </div>
-        <button class="btn btn-accent" id="repurpose-btn">♻️ Gerar Repurposing</button>
+        <button class="btn btn-accent" id="repurpose-btn">Gerar Repurposing</button>
       </div>
       <div id="repurpose-result"></div>
     </div>
@@ -759,7 +761,7 @@ async function repurposing(el) {
     const transcricao = el.querySelector('#transcricao').value.trim();
     if (!transcricao) { toast('Cole uma transcrição primeiro', 'error'); return; }
     const btn = el.querySelector('#repurpose-btn');
-    btn.disabled = true; btn.textContent = '⏳ Processando...';
+    btn.disabled = true; btn.textContent = 'Processando...';
     const result = document.getElementById('repurpose-result');
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Analisando conteúdo...</div>';
 
@@ -776,7 +778,7 @@ async function repurposing(el) {
       result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '♻️ Gerar Repurposing';
+      btn.disabled = false; btn.textContent = 'Gerar Repurposing';
     }
   });
 }
@@ -796,7 +798,7 @@ async function edicao(el) {
           <textarea id="video-instructions" rows="5" placeholder="Ex: Adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
           <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Deixe em branco e ele já faz <strong>corte natural de pausas + legendas inteligentes</strong> automaticamente (ritmo preservado; legenda ≤7 palavras, no terço inferior).</p>
         </div>
-        <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
+        <button class="btn btn-accent" id="edit-btn">Editar vídeo</button>
       </div>
 
       <div class="card" style="background:var(--bege);border:none;box-shadow:none;padding:14px 18px">
@@ -816,7 +818,7 @@ async function edicao(el) {
     const instructions = el.querySelector('#video-instructions').value.trim();
     if (!video_url) { toast('Informe a URL do vídeo', 'error'); return; }
     const btn = el.querySelector('#edit-btn');
-    btn.disabled = true; btn.textContent = '⏳ Processando...';
+    btn.disabled = true; btn.textContent = 'Processando...';
     const result = document.getElementById('edit-result');
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo com FFmpeg… pode levar alguns segundos.</div>';
 
@@ -847,14 +849,14 @@ async function edicao(el) {
       // Ops aplicadas em formato legível
       const ops = data.ops_applied || {};
       const opsList = [
-        ops.trim    ? `✂️ Corte: ${ops.trim.start}s → ${ops.trim.end}s` : null,
-        ops.resize  ? `📐 Resize: ${ops.resize}` : null,
-        ops.speed   ? `⏩ Velocidade: ${ops.speed}×` : null,
-        ops.mute    ? `🔇 Áudio removido` : ops.volume !== null ? `🔊 Volume: ${Math.round(ops.volume * 100)}%` : null,
-        ops.grayscale ? `🎞 Preto e branco` : null,
-        ops.removeSilence ? `✂️ Pausas removidas` : null,
-        ops.subtitles ? `💬 Legendas (burned-in)` : null,
-        ops.subtitles_warning ? `⚠️ Legendas não aplicadas: ${ops.subtitles_warning}` : null,
+        ops.trim    ? `Corte: ${ops.trim.start}s → ${ops.trim.end}s` : null,
+        ops.resize  ? `Resize: ${ops.resize}` : null,
+        ops.speed   ? `Velocidade: ${ops.speed}×` : null,
+        ops.mute    ? `Áudio removido` : ops.volume !== null ? `Volume: ${Math.round(ops.volume * 100)}%` : null,
+        ops.grayscale ? `Preto e branco` : null,
+        ops.removeSilence ? `Pausas removidas` : null,
+        ops.subtitles ? `Legendas (burned-in)` : null,
+        ops.subtitles_warning ? `Legendas não aplicadas: ${ops.subtitles_warning}` : null,
       ].filter(Boolean);
 
       result.innerHTML = `
@@ -880,7 +882,7 @@ async function edicao(el) {
               ${opsList.map(o=>`<div style="font-size:.88rem;padding:5px 0;border-bottom:1px solid var(--bege-dark)">${o}</div>`).join('')}
             </div>
           ` : ''}
-          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-full">⬇ Baixar vídeo editado (MP4)</a>
+          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-full">Baixar vídeo editado (MP4)</a>
         </div>
       `;
       toast('Vídeo editado com sucesso!');
@@ -888,7 +890,7 @@ async function edicao(el) {
       result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${safeHtml(err.message)}</p></div>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '🎬 Editar vídeo';
+      btn.disabled = false; btn.textContent = 'Editar vídeo';
     }
   });
 }
@@ -903,7 +905,7 @@ async function mercado(el) {
           <label>Tema ou briefing de pesquisa</label>
           <textarea id="market-tema" rows="5" placeholder="Ex: Tendências em alimentação intuitiva no Instagram BR, concorrentes que falam de comportamento alimentar..."></textarea>
         </div>
-        <button class="btn btn-accent btn-full" id="market-btn">📊 Pesquisar</button>
+        <button class="btn btn-accent btn-full" id="market-btn">Pesquisar</button>
       </div>
       <div id="market-result"></div>
     </div>
@@ -935,7 +937,7 @@ async function mercado(el) {
     const tema = el.querySelector('#market-tema').value.trim();
     if (!tema) { toast('Preencha o tema', 'error'); return; }
     const btn = el.querySelector('#market-btn');
-    btn.disabled = true; btn.textContent = '⏳ Pesquisando...';
+    btn.disabled = true; btn.textContent = 'Pesquisando...';
     const result = document.getElementById('market-result');
     result.innerHTML = '<div class="loading"><div class="spinner"></div> Analisando mercado...</div>';
 
@@ -953,7 +955,7 @@ async function mercado(el) {
       result.innerHTML = `<p style="color:#c0392b">Erro: ${err.message}</p>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '📊 Pesquisar';
+      btn.disabled = false; btn.textContent = 'Pesquisar';
     }
   });
 
@@ -967,14 +969,14 @@ async function insights(el) {
 
     <div class="card" style="margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px">
-        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">📸 Instagram — performance orgânica</h3>
+        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">Instagram — performance orgânica</h3>
         <div style="display:flex;gap:6px;align-items:center">
           <select id="ig-period" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
             <option value="week">Última semana</option>
             <option value="month" selected>Último mês</option>
             <option value="year">Último ano</option>
           </select>
-          <button class="btn btn-accent btn-sm" id="ig-analyze">🤖 Analisar com IA</button>
+          <button class="btn btn-accent btn-sm" id="ig-analyze">Analisar com IA</button>
         </div>
       </div>
       <div id="ig-data"><div class="loading"><div class="spinner"></div> Carregando Instagram…</div></div>
@@ -986,7 +988,7 @@ async function insights(el) {
 
   const igState = { period: 'month', data: null };
   const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('pt-BR');
-  const typeBadge = t => ({ REELS:'🎬 Reel', VIDEO:'🎬 Vídeo', CAROUSEL_ALBUM:'🎠 Carrossel', IMAGE:'🖼 Imagem', FEED:'🖼 Feed', STORY:'⚡ Story' }[t] || t || 'Post');
+  const typeBadge = t => ({ REELS:'Reel', VIDEO:'Vídeo', CAROUSEL_ALBUM:'Carrossel', IMAGE:'Imagem', FEED:'Feed', STORY:'Story' }[t] || t || 'Post');
 
   async function loadIG(period) {
     igState.period = period;
@@ -1019,7 +1021,7 @@ async function insights(el) {
                 ${p.thumbnail ? `<img src="${p.thumbnail}" alt="" style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
                 <div style="flex:1;min-width:0">
                   <div style="font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${typeBadge(p.type)} · ${safeHtml(p.caption || '(sem legenda)')}</div>
-                  <div style="font-size:.72rem;color:var(--muted)">❤️ ${fmt(p.likes)} · 💬 ${fmt(p.comments)}${p.reach!==null?` · 👁 ${fmt(p.reach)}`:''}${p.saved!==null?` · 🔖 ${fmt(p.saved)}`:''}${p.engagementRate!==null?` · ${p.engagementRate}%`:''}</div>
+                  <div style="font-size:.72rem;color:var(--muted)">${fmt(p.likes)} curtidas · ${fmt(p.comments)} coment.${p.reach!==null?` · ${fmt(p.reach)} alcance`:''}${p.saved!==null?` · ${fmt(p.saved)} salvos`:''}${p.engagementRate!==null?` · ${p.engagementRate}% eng.`:''}</div>
                 </div>
                 ${p.permalink ? `<a href="${p.permalink}" target="_blank" style="color:var(--terracota);font-size:.8rem;flex-shrink:0">abrir ↗</a>` : ''}
               </div>
@@ -1039,7 +1041,7 @@ async function insights(el) {
     if (!d || !d.configured) { toast('Configure o Instagram primeiro', 'error'); return; }
     if (!d.posts || !d.posts.length) { toast('Sem posts no período para analisar', 'error'); return; }
     const btn = el.querySelector('#ig-analyze');
-    btn.disabled = true; btn.textContent = '⏳ Analisando…';
+    btn.disabled = true; btn.textContent = 'Analisando…';
     const out = document.getElementById('ig-analysis');
     out.innerHTML = '<div class="card"><div class="loading"><div class="spinner"></div> A IA está analisando a performance…</div></div>';
     try {
@@ -1050,7 +1052,7 @@ async function insights(el) {
       out.innerHTML = `<div class="card"><p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p></div>`;
       toast(e.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = '🤖 Analisar com IA';
+      btn.disabled = false; btn.textContent = 'Analisar com IA';
     }
   });
 
