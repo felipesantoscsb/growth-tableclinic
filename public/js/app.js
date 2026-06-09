@@ -785,6 +785,7 @@ async function edicao(el) {
         <div class="form-group">
           <label>Instruções em linguagem natural</label>
           <textarea id="video-instructions" rows="5" placeholder="Ex: Remover pausas e silêncios, adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Escreva livremente — a IA interpreta o pedido (cortes, formato, velocidade, volume, mudo, P&B, legendas, remover pausas). Não precisa de palavras exatas.</p>
         </div>
         <button class="btn btn-accent" id="edit-btn">🎬 Editar vídeo</button>
       </div>

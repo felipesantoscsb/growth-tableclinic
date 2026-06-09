@@ -183,6 +183,57 @@ function parseInstructions(instructions, duration) {
   return ops;
 }
 
+// Valida e TRAVA o objeto de operações (venha da IA ou do regex) antes do ffmpeg —
+// garante que nada inválido/alucinado chegue ao processamento.
+function validateOps(raw, duration) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const ops = {
+    trim: null,
+    resize: null,
+    subtitles: r.subtitles === true,
+    removeSilence: r.removeSilence === true,
+    speed: null,
+    volume: null,
+    mute: r.mute === true,
+    grayscale: r.grayscale === true,
+  };
+
+  // trim em segundos, dentro de [0, duration]; ignora cortes inválidos/insignificantes
+  if (r.trim && typeof r.trim === 'object') {
+    let start = Number(r.trim.start);
+    let end = Number(r.trim.end);
+    if (!Number.isFinite(start)) start = 0;
+    start = Math.max(0, Math.min(start, duration));
+    if (!Number.isFinite(end) || end <= 0) end = duration;
+    end = Math.max(0, Math.min(end, duration));
+    if (end - start >= 0.5) ops.trim = { start, end };
+  }
+
+  if (['9:16', '1:1', '16:9'].includes(r.resize)) ops.resize = r.resize;
+
+  const s = Number(r.speed);
+  if (Number.isFinite(s) && s > 0 && s !== 1) ops.speed = Math.min(2.0, Math.max(0.5, s));
+
+  // volume é multiplicador (1 = 100%); ignorado quando mudo
+  const v = Number(r.volume);
+  if (!ops.mute && Number.isFinite(v) && v >= 0 && v !== 1) ops.volume = Math.min(5, v);
+
+  return ops;
+}
+
+// Híbrido: a IA (Claude) interpreta o texto livre; o código valida/trava; o regex
+// é o fallback se a IA falhar ou faltar a chave (require lazy não acopla o load à chave).
+async function resolveOps(instructions, duration) {
+  try {
+    const { interpretVideoInstructions } = require('./claude');
+    const raw = await interpretVideoInstructions({ instructions, duration });
+    return validateOps(raw, duration);
+  } catch (e) {
+    console.warn('[videoEditor] interpretação IA falhou, usando parser de texto:', e.message);
+    return validateOps(parseInstructions(instructions, duration), duration);
+  }
+}
+
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
   return new Promise((resolve, reject) => {
@@ -394,7 +445,7 @@ async function editVideo({ video_url, instructions, cardId }) {
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  const ops = parseInstructions(instructions, duration);
+  const ops = await resolveOps(instructions, duration);
   const outputPath = path.join(sessionDir, 'output.mp4');
 
   // Passo 1 (opcional): remoção de silêncios → intermediário
