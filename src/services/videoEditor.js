@@ -166,6 +166,10 @@ function parseInstructions(instructions, duration) {
   // Remoção de pausas reage ao SUBSTANTIVO "silêncio(s)" (lacunas sem fala)
   if (text.match(/paus[as]|silencio|silence|cortar\s+paus/i)) ops.removeSilence = true;
 
+  // Opt-outs explícitos (cut e legenda são padrão, então é preciso poder desligar)
+  if (text.match(/sem\s+legenda|nao\s+(?:quero\s+)?legenda|sem\s+caption/)) ops.subtitles = false;
+  if (text.match(/sem\s+cort|nao\s+cort|mant(?:er|enha)\s+(?:as\s+)?paus|sem\s+remover\s+paus/)) ops.removeSilence = false;
+
   // Velocidade: "velocidade 1.1", "1.1x"/"2x" (sem ser resize tipo 9x16),
   // "acelerar 10%"/"10% mais rápido" (→1.1), "reduzir 10%"/"10% mais devagar" (→0.9).
   // text já está sem acento (rápido→rapido). atempo do ffmpeg cobre 0.5–2.0 (1.1 ok).
