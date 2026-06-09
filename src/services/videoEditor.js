@@ -183,57 +183,6 @@ function parseInstructions(instructions, duration) {
   return ops;
 }
 
-// Valida e TRAVA o objeto de operações (venha da IA ou do regex) antes do ffmpeg —
-// garante que nada inválido/alucinado chegue ao processamento.
-function validateOps(raw, duration) {
-  const r = raw && typeof raw === 'object' ? raw : {};
-  const ops = {
-    trim: null,
-    resize: null,
-    subtitles: r.subtitles === true,
-    removeSilence: r.removeSilence === true,
-    speed: null,
-    volume: null,
-    mute: r.mute === true,
-    grayscale: r.grayscale === true,
-  };
-
-  // trim em segundos, dentro de [0, duration]; ignora cortes inválidos/insignificantes
-  if (r.trim && typeof r.trim === 'object') {
-    let start = Number(r.trim.start);
-    let end = Number(r.trim.end);
-    if (!Number.isFinite(start)) start = 0;
-    start = Math.max(0, Math.min(start, duration));
-    if (!Number.isFinite(end) || end <= 0) end = duration;
-    end = Math.max(0, Math.min(end, duration));
-    if (end - start >= 0.5) ops.trim = { start, end };
-  }
-
-  if (['9:16', '1:1', '16:9'].includes(r.resize)) ops.resize = r.resize;
-
-  const s = Number(r.speed);
-  if (Number.isFinite(s) && s > 0 && s !== 1) ops.speed = Math.min(2.0, Math.max(0.5, s));
-
-  // volume é multiplicador (1 = 100%); ignorado quando mudo
-  const v = Number(r.volume);
-  if (!ops.mute && Number.isFinite(v) && v >= 0 && v !== 1) ops.volume = Math.min(5, v);
-
-  return ops;
-}
-
-// Híbrido: a IA (Claude) interpreta o texto livre; o código valida/trava; o regex
-// é o fallback se a IA falhar ou faltar a chave (require lazy não acopla o load à chave).
-async function resolveOps(instructions, duration) {
-  try {
-    const { interpretVideoInstructions } = require('./claude');
-    const raw = await interpretVideoInstructions({ instructions, duration });
-    return validateOps(raw, duration);
-  } catch (e) {
-    console.warn('[videoEditor] interpretação IA falhou, usando parser de texto:', e.message);
-    return validateOps(parseInstructions(instructions, duration), duration);
-  }
-}
-
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
   return new Promise((resolve, reject) => {
@@ -296,6 +245,44 @@ function hasAudioStream(inputPath) {
 }
 
 // Transcreve o áudio do vídeo e gera um arquivo .srt (OpenAI Whisper)
+// Whisper "alucina" frases dos dados de treino quando o áudio é silencioso ou
+// sem fala — a mais comum em PT é "Legendas pela comunidade Amara.org". Lista de
+// assinaturas a descartar para não queimar esse lixo no vídeo.
+const SRT_HALLUCINATIONS = [
+  'amara.org',
+  'legendas pela comunidade',
+  'legendado pela comunidade',
+  'subtitles by',
+  'subtitulado por',
+  'obrigado por assistir',
+  'obrigada por assistir',
+  'thanks for watching',
+  'thank you for watching',
+  'se inscreva no canal',
+];
+
+// Remove cues de alucinação/ruído de um SRT e re-numera. Retorna '' se sobrar nada.
+function cleanSrtHallucinations(srt) {
+  const norm = s => s.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
+  const blocks = String(srt || '').replace(/\r/g, '').trim().split(/\n\s*\n/).filter(b => b.trim());
+  const kept = [];
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const tIdx = lines.findIndex(l => l.includes('-->'));
+    if (tIdx < 0) continue; // bloco malformado
+    const textLines = lines.slice(tIdx + 1);
+    const joined = textLines.join(' ').trim();
+    const text = norm(joined);
+    if (!text) continue;
+    const isHallucination = SRT_HALLUCINATIONS.some(p => text.includes(p));
+    const onlyMusic = /^[\s♪♫]+$/.test(joined);
+    if (isHallucination || onlyMusic) continue;
+    kept.push({ timeLine: lines[tIdx], textLines });
+  }
+  if (kept.length === 0) return '';
+  return kept.map((c, i) => `${i + 1}\n${c.timeLine}\n${c.textLines.join('\n')}`).join('\n\n') + '\n';
+}
+
 async function transcribeToSrt(videoPath, sessionDir) {
   const openai = getOpenAI();
   if (!openai) throw new Error('Legendas exigem OPENAI_API_KEY configurada no ambiente');
@@ -324,8 +311,14 @@ async function transcribeToSrt(videoPath, sessionDir) {
     language: 'pt',
   });
 
+  // Filtra alucinações do Whisper (Amara.org etc.). Se não sobrar legenda real,
+  // é áudio sem fala — falha de propósito para entregar o vídeo sem legenda.
+  const cleaned = cleanSrtHallucinations(typeof srt === 'string' ? srt : String(srt));
+  if (!cleaned.trim())
+    throw new Error('transcrição vazia ou só com ruído (áudio sem fala) — vídeo entregue sem legenda');
+
   const srtPath = path.join(sessionDir, 'subs.srt');
-  fs.writeFileSync(srtPath, typeof srt === 'string' ? srt : String(srt));
+  fs.writeFileSync(srtPath, cleaned);
   return srtPath;
 }
 
@@ -445,7 +438,7 @@ async function editVideo({ video_url, instructions, cardId }) {
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  const ops = await resolveOps(instructions, duration);
+  const ops = parseInstructions(instructions, duration);
   const outputPath = path.join(sessionDir, 'output.mp4');
 
   // Passo 1 (opcional): remoção de silêncios → intermediário

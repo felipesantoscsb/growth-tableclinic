@@ -224,55 +224,6 @@ role: "hook" no primeiro, "cta" no último, "content" no meio. title/signature/b
   return parseCarouselJson(text);
 }
 
-// Interpreta um pedido em texto livre de edição de vídeo e mapeia para o conjunto
-// FIXO de operações suportadas. Quem chama valida/trava os valores antes do ffmpeg.
-async function interpretVideoInstructions({ instructions, duration }) {
-  const dur = Math.round(Number(duration) || 0);
-  const systemPrompt = `Você converte um pedido em texto livre (português) de edição de vídeo em um
-conjunto FIXO de operações. Entenda a INTENÇÃO — não exija palavras exatas.
-
-Duração do vídeo: ${dur} segundos.
-
-Responda SOMENTE com JSON válido, sem nada antes ou depois:
-{
-  "trim": null,
-  "resize": null,
-  "subtitles": false,
-  "removeSilence": false,
-  "speed": null,
-  "volume": null,
-  "mute": false,
-  "grayscale": false
-}
-
-Significado e regras de cada campo:
-- trim: { "start": <seg>, "end": <seg> } se pedir cortar/começar em/remover os primeiros N segundos; senão null. Em segundos, dentro de [0, ${dur}]. "Remover os primeiros N segundos" => start=N, end=${dur}.
-- resize: "9:16" (vertical/reels/stories), "1:1" (quadrado/square), "16:9" (horizontal/paisagem); senão null.
-- subtitles: true se pedir legenda/caption/legendar.
-- removeSilence: true se pedir cortar PAUSAS/SILÊNCIOS (lacunas sem fala). ISSO NÃO É mute.
-- speed: multiplicador entre 0.5 e 2.0 ("2x"=2; "mais devagar"≈0.75; "acelerar um pouco"≈1.25); senão null.
-- volume: multiplicador (1=100%, 0.5=50%, 1.5=150%); senão null.
-- mute: true SÓ para remover/desligar o ÁUDIO inteiro ("sem áudio", "mudo", "silenciar o vídeo", "tirar o som"). "cortar os silêncios" NÃO é mute.
-- grayscale: true se pedir preto e branco / P&B / cinza.
-
-Marque apenas o que foi realmente pedido; o resto fica null/false.`;
-
-  const text = await streamText({
-    model: MODEL,
-    max_tokens: 600,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: instructions }],
-  });
-
-  let raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  try { return JSON.parse(raw); }
-  catch {
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error('IA não retornou operações de edição válidas');
-    return JSON.parse(m[0]);
-  }
-}
-
 async function generateAds({ objective, product, audience }) {
   const msg = await client.messages.create({
     model: MODEL,
@@ -407,4 +358,4 @@ Se os dados forem poucos, diga isso e seja cauteloso nas conclusões.`;
   return streamText({ model: MODEL, max_tokens: 2500, system, messages: [{ role: 'user', content: userContent }] });
 }
 
-module.exports = { generateContent, generateCarouselContent, interpretCarouselInput, interpretVideoInstructions, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights, analyzeInstagramPerformance };
+module.exports = { generateContent, generateCarouselContent, interpretCarouselInput, generateAds, generateRepurpose, generateMarketResearch, analyzeInsights, analyzeInstagramPerformance };
