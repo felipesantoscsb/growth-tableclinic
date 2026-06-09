@@ -166,15 +166,22 @@ function parseInstructions(instructions, duration) {
   // Remoção de pausas reage ao SUBSTANTIVO "silêncio(s)" (lacunas sem fala)
   if (text.match(/paus[as]|silencio|silence|cortar\s+paus/i)) ops.removeSilence = true;
 
-  const speedMatch = text.match(/(\d+(?:\.\d+)?)[x×]\s*(?:velocidade|speed)/i)
-    || text.match(/velocidade\s+(\d+(?:\.\d+)?)/i);
-  if (speedMatch) ops.speed = Math.min(2.0, Math.max(0.5, parseFloat(speedMatch[1])));
+  // Velocidade: "velocidade 1.1", "1.1x"/"2x" (sem ser resize tipo 9x16),
+  // "acelerar 10%"/"10% mais rápido" (→1.1), "reduzir 10%"/"10% mais devagar" (→0.9).
+  // text já está sem acento (rápido→rapido). atempo do ffmpeg cobre 0.5–2.0 (1.1 ok).
+  let speedVal = null, sm;
+  if ((sm = text.match(/velocidade\s+(\d+(?:[.,]\d+)?)/))) speedVal = parseFloat(sm[1].replace(',', '.'));
+  else if ((sm = text.match(/(\d+(?:[.,]\d+)?)\s*[x×](?!\s*\d)/))) speedVal = parseFloat(sm[1].replace(',', '.'));
+  else if ((sm = text.match(/acelerar(?:\s+em)?\s+(\d+)\s*%/)) || (sm = text.match(/(\d+)\s*%\s*mais\s+rapid/))) speedVal = 1 + parseFloat(sm[1]) / 100;
+  else if ((sm = text.match(/(?:desacelerar|reduzir|diminuir)(?:\s+em)?\s+(\d+)\s*%/)) || (sm = text.match(/(\d+)\s*%\s*mais\s+(?:devagar|lent)/))) speedVal = 1 - parseFloat(sm[1]) / 100;
+  if (speedVal !== null) ops.speed = Math.min(2.0, Math.max(0.5, speedVal));
 
   // Mute reage ao VERBO "silenciar/silencie" (não ao substantivo "silêncio",
   // que é remoção de pausas) — evita que "cortar os silêncios" tire todo o áudio.
   if (text.match(/sem\s+(?:audio|som)|(?:tirar|remover)\s+(?:o\s+)?(?:audio|som)|mudo|mute|silenci[ae]/i)) ops.mute = true;
   else {
-    const volMatch = text.match(/volume[:\s]+(\d+)%/i);
+    // aceita "volume: 50%", "volume 50%", "volume para/pra/a/de 50%"
+    const volMatch = text.match(/volume\s*(?:para|pra|a|de|:)?\s*(\d+)\s*%/i);
     if (volMatch) ops.volume = parseFloat(volMatch[1]) / 100;
   }
 
@@ -405,10 +412,10 @@ function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) 
     // em título/capa — serif fino não lê bem em legenda sobre imagem).
     // Fontsize relativo à altura de script do libass (~288): 10 ≈ 3.3% da altura.
     // Cor creme #F8F4EE → ASS é &HAABBGGRR (BGR!) → &H00EEF4F8.
-    // MarginV=110 sobe a legenda do rodapé; MarginL/R=70 confinam num bloco central
-    // estreito — assim ela fica centralizada e sai de trás dos botões (direita) e
-    // da legenda/handle (rodapé) do Instagram.
-    const style = "force_style='Fontname=Liberation Sans,Fontsize=10,Bold=1,PrimaryColour=&H00EEF4F8,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginL=70,MarginR=70,MarginV=110'";
+    // Posição: terço inferior (MarginV=60) — abaixo do rosto e acima da legenda/handle
+    // do Instagram; MarginL/R=70 mantêm um bloco central estreito que sai de trás dos
+    // botões da direita (curtir/comentar) sem precisar subir até o rosto.
+    const style = "force_style='Fontname=Liberation Sans,Fontsize=10,Bold=1,PrimaryColour=&H00EEF4F8,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginL=70,MarginR=70,MarginV=60'";
     const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
     ffmpeg(inputPath)
       .videoFilters(`subtitles='${escaped}':${style}`)
