@@ -625,29 +625,44 @@ const RADAR_SYSTEM = `Você analisa temas para @nutrievelynliu, nutricionista co
 // Processa UMA query: web search (com fallback) → parse → insert. Retorna o tema inserido.
 async function runRadarQuery(query) {
   let text;
+  let webErrMsg = null;
+
+  // 1) Tenta web search (beta). Se falhar, registra o motivo e cai pro fallback.
   try {
     const msg = await client.beta.messages.create({
       model: MODEL,
       max_tokens: 1024,
       system: RADAR_SYSTEM,
       messages: [{ role: 'user', content: `Pesquise e analise: ${query}` }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-    }, { headers: { 'anthropic-beta': 'web-search-2025-03-05' } });
-    text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-  } catch (_webErr) {
-    const fallback = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: RADAR_SYSTEM,
-      messages: [{ role: 'user', content: `Com base no seu conhecimento atual, analise o tema: ${query}` }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
     });
-    text = fallback.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  } catch (webErr) {
+    webErrMsg = webErr?.message || String(webErr);
+    console.warn(`[radar] web search falhou ("${query}"): ${webErrMsg} — usando fallback`);
   }
+
+  // 2) Fallback: conhecimento do modelo (sem web). Se ISSO falhar, propaga erro claro.
+  if (!text) {
+    try {
+      const fallback = await client.messages.create({
+        model: MODEL,
+        max_tokens: 1024,
+        system: RADAR_SYSTEM,
+        messages: [{ role: 'user', content: `Com base no seu conhecimento atual, analise o tema: ${query}` }],
+      });
+      text = fallback.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    } catch (fbErr) {
+      throw new Error(`web search: ${webErrMsg || 'n/a'} | fallback: ${fbErr?.message || fbErr}`);
+    }
+  }
+
+  if (!text) throw new Error(`sem texto na resposta${webErrMsg ? ` (web: ${webErrMsg})` : ''}`);
 
   const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   let parsed;
   try { parsed = JSON.parse(clean); }
-  catch { const m = clean.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error('JSON inválido'); }
+  catch { const m = clean.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error(`JSON inválido: ${clean.slice(0, 120)}`); }
 
   const score = Number(parsed.score_aderencia) || 0;
   const status = score <= 5 ? 'descartado' : 'pendente';

@@ -1818,8 +1818,13 @@ async function editorial(el) {
 
           // done
           const n = st.temas?.length || 0;
-          res.innerHTML = `<div class="ed-result-box ed-result-ok">${n} temas encontrados${st.errors?.length ? ` · ${st.errors.length} erros` : ''}</div>`;
-          toast(`${n} temas adicionados!`);
+          const errDetail = (st.errors?.length)
+            ? `<div class="ed-warnings">${st.errors.map(e => `<div>⚠ ${safeHtml(e.query || '')}: ${safeHtml(e.error || JSON.stringify(e))}</div>`).join('')}</div>`
+            : '';
+          const cls = n > 0 ? 'ed-result-ok' : 'ed-result-err';
+          res.innerHTML = `<div class="ed-result-box ${cls}">${n} temas encontrados${st.errors?.length ? ` · ${st.errors.length} erros` : ''}${errDetail}</div>`;
+          if (n > 0) toast(`${n} temas adicionados!`);
+          else toast('Radar não retornou temas — veja o detalhe do erro', 'error');
           const fresh = await api('GET', '/editorial/radar');
           el.querySelector('.ed-section').outerHTML = renderRadar(fresh);
           bindRadar();
