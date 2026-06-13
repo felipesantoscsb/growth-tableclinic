@@ -95,9 +95,9 @@ function logout() {
 
 // ── Role helpers ───────────────────────────────────────
 const ROLE_MENUS = {
-  admin:  ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','admin'],
-  evelyn: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights'],
-  editor: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights'],
+  admin:  ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial','admin'],
+  evelyn: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
+  editor: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
   nutri:  ['gerador','repurposing','edicao'],
 };
 
@@ -111,6 +111,7 @@ const MENU_LABELS = {
   edicao:      { icon: SVG('<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 12h20M2 7.5h5M2 16.5h5M17 7.5h5M17 16.5h5"/>'), label: 'Edição' },
   mercado:     { icon: SVG('<path d="M18 20V10M12 20V4M6 20v-6"/>'), label: 'Mercado' },
   insights:    { icon: SVG('<path d="M9 18h6M10 22h4"/><path d="M15.1 14c.2-1 .7-1.8 1.4-2.5A4.65 4.65 0 0 0 18 8 6 6 0 1 0 6.5 11.5c.7.7 1.2 1.5 1.4 2.5"/>'), label: 'Insights' },
+  editorial:   { icon: SVG('<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>'), label: 'Editorial' },
   admin:       { icon: SVG('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'), label: 'Admin' },
 };
 
@@ -186,7 +187,7 @@ function renderApp() {
 
 function renderPage() {
   const content = document.getElementById('content');
-  const pages = { calendario, gerador, anuncios, repurposing, edicao, mercado, insights, admin };
+  const pages = { calendario, gerador, anuncios, repurposing, edicao, mercado, insights, editorial, admin };
   if (pages[currentPage]) pages[currentPage](content);
 }
 
@@ -1148,6 +1149,1122 @@ async function admin(el) {
   });
 
   await loadUsers();
+}
+
+// ── Editorial Engine ───────────────────────────────────
+async function editorial(el) {
+  const EDITORIA_LABEL = {
+    canetas_noticia:       'Canetas & Notícia',
+    tipologico_absolvicao: 'Tipológico / Absolvição',
+    identidade:            'Identidade',
+    historia_consultorio:  'História do Consultório',
+    reflexao_collab:       'Reflexão / Collab',
+    outro:                 'Outro',
+  };
+  const EDITORIA_COLOR = {
+    canetas_noticia:       'var(--verde)',
+    tipologico_absolvicao: 'var(--terracota)',
+    identidade:            '#7a6a9a',
+    historia_consultorio:  '#4a7a8a',
+    reflexao_collab:       'var(--muted)',
+    outro:                 'var(--bege-dark)',
+  };
+
+  // Estado local da aba ativa
+  let activeTab = 'semana';
+
+  function pct(n) { return n != null ? (n * 100).toFixed(2) + '%' : '—'; }
+  function shortDesc(d) { return safeHtml((d || '').slice(0, 90) + ((d || '').length > 90 ? '…' : '')); }
+
+  function renderTabs() {
+    return `
+      <div class="ed-tabs">
+        <button class="ed-tab ${activeTab === 'semana'    ? 'active' : ''}" data-tab="semana">🗓 Semana</button>
+        <button class="ed-tab ${activeTab === 'dashboard' ? 'active' : ''}" data-tab="dashboard">📊 Dashboard</button>
+        <button class="ed-tab ${activeTab === 'radar'     ? 'active' : ''}" data-tab="radar">📡 Radar</button>
+        <button class="ed-tab ${activeTab === 'posts'     ? 'active' : ''}" data-tab="posts">Posts</button>
+        <button class="ed-tab ${activeTab === 'mining'    ? 'active' : ''}" data-tab="mining">Mineração</button>
+        <button class="ed-tab ${activeTab === 'upload'    ? 'active' : ''}" data-tab="upload">Upload CSV</button>
+      </div>`;
+  }
+
+  function bindTabs() {
+    el.querySelectorAll('.ed-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeTab = btn.dataset.tab;
+        render();
+      });
+    });
+  }
+
+  // ── Tab: Upload CSV ─────────────────────────────────
+  function renderUpload() {
+    return `
+      <div class="ed-section">
+        <h3 class="ed-section-title">Importar analytics do Instagram</h3>
+        <p class="ed-hint">Cole o conteúdo do CSV exportado do Meta Business Suite (UTF-8). Contas processadas: <strong>nutrievelynliu</strong> e <strong>evelynlwl</strong>.</p>
+
+        <div class="ed-upload-area">
+          <label class="btn btn-outline" style="cursor:pointer">
+            Escolher arquivo .csv
+            <input type="file" id="ed-file-input" accept=".csv,text/csv" style="display:none">
+          </label>
+          <span id="ed-file-name" style="margin-left:10px;color:var(--muted);font-size:.85rem"></span>
+        </div>
+
+        <textarea id="ed-csv-text" class="ed-textarea" placeholder="…ou cole o CSV aqui" rows="8"></textarea>
+
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <button id="ed-upload-btn" class="btn btn-primary">Importar posts</button>
+          <button id="ed-classify-btn" class="btn btn-outline">Classificar editorias (IA)</button>
+        </div>
+
+        <div id="ed-upload-result" style="margin-top:14px"></div>
+      </div>`;
+  }
+
+  function bindUpload() {
+    const fileInput  = el.querySelector('#ed-file-input');
+    const fileName   = el.querySelector('#ed-file-name');
+    const csvText    = el.querySelector('#ed-csv-text');
+    const uploadBtn  = el.querySelector('#ed-upload-btn');
+    const classifyBtn= el.querySelector('#ed-classify-btn');
+    const resultDiv  = el.querySelector('#ed-upload-result');
+
+    fileInput?.addEventListener('change', async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      fileName.textContent = file.name;
+      csvText.value = await file.text();
+    });
+
+    uploadBtn?.addEventListener('click', async () => {
+      const csv = csvText.value.trim();
+      if (!csv) { toast('Cole ou selecione um CSV primeiro', 'error'); return; }
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Importando…';
+      resultDiv.innerHTML = '';
+      try {
+        const d = await api('POST', '/editorial/upload-csv', { csv });
+        resultDiv.innerHTML = `
+          <div class="ed-result-box ed-result-ok">
+            <strong>${d.inserted}</strong> novos · <strong>${d.updated}</strong> atualizados · <strong>${d.total}</strong> total
+            ${d.warnings?.length ? `<div class="ed-warnings">${d.warnings.map(w => `<div>⚠ ${safeHtml(w)}</div>`).join('')}</div>` : ''}
+          </div>`;
+        toast('CSV importado!');
+      } catch (err) {
+        resultDiv.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+        toast(err.message, 'error');
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Importar posts';
+      }
+    });
+
+    classifyBtn?.addEventListener('click', async () => {
+      classifyBtn.disabled = true;
+      classifyBtn.textContent = 'Classificando (pode levar ~30s)…';
+      resultDiv.innerHTML = '';
+      try {
+        const d = await api('POST', '/editorial/classify', { limit: 200 });
+        resultDiv.innerHTML = `
+          <div class="ed-result-box ed-result-ok">
+            <strong>${d.classified}</strong> posts classificados
+            ${d.errors?.length ? `<div class="ed-warnings">${d.errors.map(e => `<div>⚠ ${safeHtml(e)}</div>`).join('')}</div>` : ''}
+          </div>`;
+        toast(`${d.classified} posts classificados!`);
+      } catch (err) {
+        resultDiv.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+        toast(err.message, 'error');
+      } finally {
+        classifyBtn.disabled = false;
+        classifyBtn.textContent = 'Classificar editorias (IA)';
+      }
+    });
+  }
+
+  // ── Tab: Posts ──────────────────────────────────────
+  let postsData = null;
+  let postsPage = 1;
+  let postsEditoria = '';
+  let postsSemEdit = false;
+
+  async function loadPosts() {
+    const params = new URLSearchParams({ page: postsPage, limit: 50 });
+    if (postsEditoria) params.set('editoria', postsEditoria);
+    if (postsSemEdit) params.set('sem_editoria', '1');
+    const d = await api('GET', `/editorial/posts?${params}`);
+    postsData = d;
+  }
+
+  function renderPostsTab() {
+    if (!postsData) return `<div class="ed-loading">Carregando…</div>`;
+    const { posts, total, page, limit } = postsData;
+    const editorias = ['', ...Object.keys(EDITORIA_LABEL)];
+    return `
+      <div class="ed-section">
+        <div class="ed-posts-filters">
+          <select id="ed-filter-editoria" class="input" style="width:200px">
+            ${editorias.map(e => `<option value="${e}" ${postsEditoria === e ? 'selected' : ''}>${e ? EDITORIA_LABEL[e] || e : 'Todas editorias'}</option>`).join('')}
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:.88rem">
+            <input type="checkbox" id="ed-filter-sem" ${postsSemEdit ? 'checked' : ''}> Sem classificação
+          </label>
+        </div>
+
+        <div class="ed-posts-meta">${total} posts · página ${page} de ${Math.ceil(total / limit) || 1}</div>
+
+        <div class="ed-table-wrap">
+          <table class="ed-table">
+            <thead><tr>
+              <th>Tipo</th><th>Descrição</th><th>Data</th>
+              <th>Alcance</th><th>Envios%</th><th>Salv%</th>
+              <th>Editoria</th><th></th>
+            </tr></thead>
+            <tbody>
+              ${posts.map(p => {
+                const reach = p.reach || 1;
+                const taxaEnvio = ((p.shares / reach) * 100).toFixed(2);
+                const taxaSalv  = ((p.saves  / reach) * 100).toFixed(2);
+                const edColor   = EDITORIA_COLOR[p.editoria] || 'var(--muted)';
+                return `<tr>
+                  <td><span class="ed-badge" style="background:${edColor}20;color:${edColor}">${safeHtml(p.post_type || '?')}</span></td>
+                  <td class="ed-desc">${shortDesc(p.description)}</td>
+                  <td style="white-space:nowrap;font-size:.8rem;color:var(--muted)">${p.published_at ? new Date(p.published_at).toLocaleDateString('pt-BR') : (p.date || '—')}</td>
+                  <td style="text-align:right">${(p.reach || 0).toLocaleString('pt-BR')}</td>
+                  <td style="text-align:right">${taxaEnvio}%</td>
+                  <td style="text-align:right">${taxaSalv}%</td>
+                  <td>
+                    <select class="ed-select-editoria" data-id="${p.id}" style="font-size:.8rem;padding:2px 4px;border:1px solid var(--bege-dark);border-radius:4px;background:white">
+                      <option value="">—</option>
+                      ${Object.keys(EDITORIA_LABEL).map(e =>
+                        `<option value="${e}" ${p.editoria === e ? 'selected' : ''}>${EDITORIA_LABEL[e]}</option>`
+                      ).join('')}
+                    </select>
+                    ${p.editoria_manual ? '<span title="Corrigido manualmente" style="color:var(--terracota);margin-left:4px">✎</span>' : ''}
+                  </td>
+                  <td>${p.permalink ? `<a href="${safeHtml(p.permalink)}" target="_blank" style="font-size:.8rem;color:var(--verde)">↗</a>` : ''}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="ed-pagination">
+          ${page > 1 ? `<button class="btn btn-outline ed-page-btn" data-page="${page - 1}">← Anterior</button>` : ''}
+          ${posts.length === limit ? `<button class="btn btn-outline ed-page-btn" data-page="${page + 1}">Próxima →</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function bindPosts() {
+    el.querySelector('#ed-filter-editoria')?.addEventListener('change', e => {
+      postsEditoria = e.target.value;
+      postsSemEdit  = false;
+      postsPage     = 1;
+      render();
+    });
+    el.querySelector('#ed-filter-sem')?.addEventListener('change', e => {
+      postsSemEdit  = e.target.checked;
+      postsEditoria = '';
+      postsPage     = 1;
+      render();
+    });
+    el.querySelectorAll('.ed-select-editoria').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const id       = sel.dataset.id;
+        const editoria = sel.value;
+        if (!editoria) return;
+        try {
+          await api('PATCH', `/editorial/posts/${id}/editoria`, { editoria });
+          toast('Editoria salva!');
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+    el.querySelectorAll('.ed-page-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        postsPage = parseInt(btn.dataset.page, 10);
+        render();
+      });
+    });
+  }
+
+  // ── Tab: Dashboard ──────────────────────────────────
+  let analyticsData = null;
+
+  async function loadAnalytics() {
+    analyticsData = await api('GET', '/editorial/analytics');
+  }
+
+  function renderDashboard() {
+    if (!analyticsData) return `<div class="ed-loading">Carregando…</div>`;
+    const d = analyticsData;
+
+    const alertasHtml = d.alertas_fadiga?.length
+      ? `<div class="ed-alert">⚠ Editorias fatigando (últimos 3 posts abaixo de 50% da mediana): <strong>${d.alertas_fadiga.map(e => EDITORIA_LABEL[e] || e).join(', ')}</strong></div>`
+      : '';
+
+    const reencarnacaoHtml = d.fila_reencarnacao?.length
+      ? `<div class="ed-card" style="margin-bottom:20px">
+          <div class="ed-card-title">♻ Fila de Reencarnação (${d.fila_reencarnacao.length})</div>
+          <div class="ed-table-wrap"><table class="ed-table">
+            <thead><tr><th>Editoria</th><th>Descrição</th><th>Motivo</th><th>Link</th></tr></thead>
+            <tbody>${d.fila_reencarnacao.map(p => `<tr>
+              <td><span class="ed-badge" style="background:${EDITORIA_COLOR[p.editoria] || 'var(--muted)'}20;color:${EDITORIA_COLOR[p.editoria] || 'var(--muted)'}">${safeHtml(EDITORIA_LABEL[p.editoria] || p.editoria)}</span></td>
+              <td class="ed-desc">${shortDesc(p.description)}</td>
+              <td style="font-size:.8rem;color:var(--verde)">${safeHtml(p.razao)}</td>
+              <td>${p.permalink ? `<a href="${safeHtml(p.permalink)}" target="_blank" style="font-size:.8rem;color:var(--verde)">↗</a>` : ''}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </div>`
+      : '';
+
+    const editoriaCards = Object.entries(d.por_editoria || {}).map(([ed, s]) => {
+      const color = EDITORIA_COLOR[ed] || 'var(--muted)';
+      const label = EDITORIA_LABEL[ed] || ed;
+      const tend  = (s.tendencia_4semanas || []).map(t =>
+        `<div class="ed-tend-week">
+          <span style="font-size:.72rem;color:var(--muted)">${t.semana?.slice(5)}</span>
+          <span>${t.posts} post${t.posts !== 1 ? 's' : ''}</span>
+          ${t.media_envio != null ? `<span style="color:var(--verde)">${(t.media_envio*100).toFixed(2)}% env</span>` : ''}
+        </div>`
+      ).join('');
+
+      return `<div class="ed-card">
+        <div class="ed-card-header" style="border-left:4px solid ${color}">
+          <span class="ed-card-title">${safeHtml(label)}</span>
+          <span class="ed-card-count">${s.posts_count} posts</span>
+        </div>
+        <div class="ed-metrics-grid">
+          <div class="ed-metric"><div class="ed-metric-label">Mediana Envios</div><div class="ed-metric-val">${pct(s.mediana_envio)}</div></div>
+          <div class="ed-metric"><div class="ed-metric-label">Mediana Seguidores</div><div class="ed-metric-val">${pct(s.mediana_seguidor)}</div></div>
+          <div class="ed-metric"><div class="ed-metric-label">Mediana Salvamentos</div><div class="ed-metric-val">${pct(s.mediana_salvamento)}</div></div>
+          <div class="ed-metric"><div class="ed-metric-label">Mediana Comentários</div><div class="ed-metric-val">${pct(s.mediana_comentario)}</div></div>
+        </div>
+        <div class="ed-tend-row">${tend}</div>
+        ${s.top_envio?.length ? `
+        <div class="ed-top-label">Top envios</div>
+        ${s.top_envio.slice(0,2).map(p => `
+          <div class="ed-top-post">
+            <span class="ed-top-desc">${shortDesc(p.description)}</span>
+            <span class="ed-top-rate" style="color:var(--verde)">${pct(p.taxa_envio)}</span>
+          </div>`).join('')}` : ''}
+      </div>`;
+    }).join('');
+
+    const topGeralHtml = (type, arr, label) => arr?.length ? `
+      <div>
+        <div class="ed-top-label" style="margin-top:8px">${label}</div>
+        ${arr.map(p => `<div class="ed-top-post">
+          <span class="ed-top-desc">${shortDesc(p.description)}</span>
+          <span class="ed-badge" style="background:${EDITORIA_COLOR[p.editoria]||'var(--muted)'}20;color:${EDITORIA_COLOR[p.editoria]||'var(--muted)'};font-size:.72rem">${EDITORIA_LABEL[p.editoria]||p.editoria||'?'}</span>
+          <span class="ed-top-rate">${pct(p['taxa_' + type])}</span>
+        </div>`).join('')}
+      </div>` : '';
+
+    return `
+      <div class="ed-section">
+        <div class="ed-summary">
+          <div class="ed-stat"><div class="ed-stat-val">${d.total_posts}</div><div class="ed-stat-label">Posts totais</div></div>
+          <div class="ed-stat"><div class="ed-stat-val" style="color:var(--terracota)">${d.sem_classificacao}</div><div class="ed-stat-label">Sem editoria</div></div>
+          <div class="ed-stat"><div class="ed-stat-val">${d.fila_reencarnacao?.length || 0}</div><div class="ed-stat-label">Para reencarnar</div></div>
+          <div class="ed-stat"><div class="ed-stat-val" style="color:${d.alertas_fadiga?.length ? 'var(--terracota)' : 'var(--verde)'}">${d.alertas_fadiga?.length || 0}</div><div class="ed-stat-label">Alertas fadiga</div></div>
+        </div>
+
+        ${alertasHtml}
+
+        <div class="ed-two-col">
+          <div>
+            <h4 style="margin-bottom:12px">Por Editoria</h4>
+            <div class="ed-editoria-grid">${editoriaCards}</div>
+          </div>
+          <div>
+            <h4 style="margin-bottom:12px">Top Geral</h4>
+            <div class="ed-card">
+              ${topGeralHtml('envio',     d.top_geral?.envio,     '🚀 Maiores envios')}
+              ${topGeralHtml('seguidor',  d.top_geral?.seguidor,  '👤 Maiores seguidores')}
+              ${topGeralHtml('salvamento',d.top_geral?.salvamento,'🔖 Maiores salvamentos')}
+            </div>
+          </div>
+        </div>
+
+        ${reencarnacaoHtml}
+
+        ${d.sem_classificacao > 0 ? `
+          <div class="ed-hint" style="margin-top:12px">
+            ${d.sem_classificacao} posts sem editoria.
+            <button id="ed-quick-classify" class="btn btn-outline" style="margin-left:8px;padding:4px 10px;font-size:.82rem">Classificar agora (IA)</button>
+          </div>` : ''}
+      </div>`;
+  }
+
+  function bindDashboard() {
+    el.querySelector('#ed-quick-classify')?.addEventListener('click', async btn => {
+      const b = el.querySelector('#ed-quick-classify');
+      b.disabled = true; b.textContent = 'Classificando…';
+      try {
+        const d = await api('POST', '/editorial/classify', { limit: 200 });
+        toast(`${d.classified} posts classificados!`);
+        analyticsData = null;
+        await loadAnalytics();
+        render();
+      } catch (err) { toast(err.message, 'error'); b.disabled = false; b.textContent = 'Classificar agora (IA)'; }
+    });
+  }
+
+  // ── Tab: Mineração ─────────────────────────────────
+  const MINING_LABEL = {
+    frase_de_seguidora: 'Frase de seguidora',
+    referencia_formato: 'Referência de formato',
+    noticia:            'Notícia',
+    ideia_solta:        'Ideia solta',
+  };
+  const MINING_COLOR = {
+    frase_de_seguidora: 'var(--terracota)',
+    referencia_formato: '#4a7a8a',
+    noticia:            'var(--verde)',
+    ideia_solta:        '#7a6a9a',
+  };
+  const STATUS_LABEL = { novo: 'Novo', usado: 'Usado', arquivado: 'Arquivado' };
+  const STATUS_COLOR = { novo: 'var(--verde)', usado: 'var(--terracota)', arquivado: 'var(--muted)' };
+
+  let miningData   = null;
+  let miningPage   = 1;
+  let miningFilter = { type: '', status: 'novo', editoria_provavel: '', hook_potencial: '' };
+
+  async function loadMining() {
+    const params = new URLSearchParams({ page: miningPage, limit: 60 });
+    if (miningFilter.type)              params.set('type', miningFilter.type);
+    if (miningFilter.status)            params.set('status', miningFilter.status);
+    if (miningFilter.editoria_provavel) params.set('editoria_provavel', miningFilter.editoria_provavel);
+    if (miningFilter.hook_potencial)    params.set('hook_potencial', miningFilter.hook_potencial);
+    miningData = await api('GET', `/editorial/mining?${params}`);
+  }
+
+  function renderMiningAdd() {
+    return `
+      <div class="ed-card" style="margin-bottom:16px">
+        <div class="ed-card-title" style="margin-bottom:12px">Adicionar em lote</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <select id="mn-type" class="input" style="width:190px">
+            ${Object.entries(MINING_LABEL).map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}
+          </select>
+          <input id="mn-source" class="input" placeholder="URL fonte (notícias)" style="flex:1;min-width:180px">
+          <input id="mn-expires" type="date" class="input" style="width:150px" title="Data de validade (para notícias)">
+        </div>
+        <textarea id="mn-text" class="ed-textarea" rows="6"
+          placeholder="Uma entrada por linha. Cole frases de comentários, DMs, ideias soltas, links com descrição…"></textarea>
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <label class="btn btn-outline" style="cursor:pointer">
+            Importar .txt / .csv
+            <input type="file" id="mn-file" accept=".txt,.csv,text/plain,text/csv" style="display:none">
+          </label>
+          <span id="mn-fname" style="font-size:.82rem;color:var(--muted)"></span>
+          <button id="mn-add-btn" class="btn btn-primary" style="margin-left:auto">Adicionar ao banco</button>
+        </div>
+        <div id="mn-add-result" style="margin-top:10px"></div>
+      </div>`;
+  }
+
+  function renderMiningList() {
+    if (!miningData) return `<div class="ed-loading">Carregando…</div>`;
+    const { items, total, page, limit } = miningData;
+    const editorias = ['', ...Object.keys(EDITORIA_LABEL)];
+    return `
+      <div class="ed-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div class="ed-card-title">Banco (${total} itens)</div>
+          <button id="mn-label-btn" class="btn btn-outline" style="padding:5px 12px;font-size:.82rem">Etiquetar (IA)</button>
+        </div>
+        <div class="ed-posts-filters" style="margin-bottom:12px">
+          <select id="mn-f-type" class="input" style="width:175px">
+            <option value="">Todos tipos</option>
+            ${Object.entries(MINING_LABEL).map(([v,l]) => `<option value="${v}" ${miningFilter.type===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+          <select id="mn-f-status" class="input" style="width:130px">
+            <option value="">Todos status</option>
+            ${Object.entries(STATUS_LABEL).map(([v,l]) => `<option value="${v}" ${miningFilter.status===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+          <select id="mn-f-ed" class="input" style="width:200px">
+            <option value="">Todas editorias</option>
+            ${editorias.filter(Boolean).map(e => `<option value="${e}" ${miningFilter.editoria_provavel===e?'selected':''}>${EDITORIA_LABEL[e]||e}</option>`).join('')}
+          </select>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.86rem">
+            <input type="checkbox" id="mn-f-hook" ${miningFilter.hook_potencial?'checked':''}> Só hooks
+          </label>
+        </div>
+
+        ${items.length === 0
+          ? `<div class="ed-hint" style="padding:20px 0;text-align:center">Nenhum item encontrado.</div>`
+          : `<div class="mn-grid">
+            ${items.map(item => {
+              const tColor = MINING_COLOR[item.type] || 'var(--muted)';
+              const sColor = STATUS_COLOR[item.status] || 'var(--muted)';
+              return `<div class="mn-item" data-id="${item.id}">
+                <div class="mn-item-header">
+                  <span class="ed-badge" style="background:${tColor}18;color:${tColor}">${MINING_LABEL[item.type]||item.type}</span>
+                  <span class="ed-badge" style="background:${sColor}18;color:${sColor}">${STATUS_LABEL[item.status]||item.status}</span>
+                  ${item.hook_potencial ? '<span title="Hook potencial" style="color:var(--terracota);font-size:.9rem">⚡</span>' : ''}
+                  <button class="mn-btn-arch" data-id="${item.id}" title="Arquivar" style="margin-left:auto;background:none;border:none;cursor:pointer;color:var(--muted);font-size:.9rem">✕</button>
+                </div>
+                <div class="mn-content">${safeHtml(item.content)}</div>
+                ${item.tema || item.dor ? `
+                  <div class="mn-tags">
+                    ${item.tema ? `<span class="mn-tag">🏷 ${safeHtml(item.tema)}</span>` : ''}
+                    ${item.dor  ? `<span class="mn-tag">💬 ${safeHtml(item.dor)}</span>`  : ''}
+                    ${item.editoria_provavel ? `<span class="mn-tag" style="color:${EDITORIA_COLOR[item.editoria_provavel]||'var(--muted)'}">${EDITORIA_LABEL[item.editoria_provavel]||item.editoria_provavel}</span>` : ''}
+                  </div>` : ''}
+                ${item.source_url ? `<a href="${safeHtml(item.source_url)}" target="_blank" class="mn-source">↗ fonte</a>` : ''}
+                <div class="mn-status-row">
+                  <select class="mn-status-sel" data-id="${item.id}" style="font-size:.76rem;border:1px solid var(--bege-dark);border-radius:4px;padding:2px 4px;background:white">
+                    ${Object.entries(STATUS_LABEL).map(([v,l]) => `<option value="${v}" ${item.status===v?'selected':''}>${l}</option>`).join('')}
+                  </select>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>`
+        }
+        <div class="ed-pagination" style="margin-top:14px">
+          ${page > 1 ? `<button class="btn btn-outline mn-page-btn" data-page="${page-1}">← Anterior</button>` : ''}
+          ${items.length === limit ? `<button class="btn btn-outline mn-page-btn" data-page="${page+1}">Próxima →</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function renderMiningTab() {
+    return `<div class="ed-section">${renderMiningAdd()}<div id="mn-list">${renderMiningList()}</div></div>`;
+  }
+
+  function bindMining() {
+    // File import
+    el.querySelector('#mn-file')?.addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      el.querySelector('#mn-fname').textContent = f.name;
+      el.querySelector('#mn-text').value = await f.text();
+    });
+
+    // Adicionar em lote
+    el.querySelector('#mn-add-btn')?.addEventListener('click', async () => {
+      const text = el.querySelector('#mn-text').value.trim();
+      if (!text) { toast('Digite ou importe pelo menos um item', 'error'); return; }
+      const type       = el.querySelector('#mn-type').value;
+      const source_url = el.querySelector('#mn-source').value.trim() || undefined;
+      const expires_at = el.querySelector('#mn-expires').value || undefined;
+      const btn = el.querySelector('#mn-add-btn');
+      btn.disabled = true; btn.textContent = 'Adicionando…';
+      const resultDiv = el.querySelector('#mn-add-result');
+      try {
+        const d = await api('POST', '/editorial/mining', { type, text, source_url, expires_at });
+        resultDiv.innerHTML = `<div class="ed-result-box ed-result-ok">
+          <strong>${d.inserted}</strong> inseridos · <strong>${d.duplicates}</strong> duplicatas ignoradas
+        </div>`;
+        el.querySelector('#mn-text').value = '';
+        el.querySelector('#mn-fname').textContent = '';
+        toast(`${d.inserted} itens adicionados!`);
+        miningData = null;
+        await loadMining();
+        el.querySelector('#mn-list').innerHTML = renderMiningList();
+        bindMiningList();
+      } catch (err) {
+        resultDiv.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+        toast(err.message, 'error');
+      } finally { btn.disabled = false; btn.textContent = 'Adicionar ao banco'; }
+    });
+
+    bindMiningList();
+  }
+
+  function bindMiningList() {
+    // Filtros
+    el.querySelector('#mn-f-type')?.addEventListener('change', e => { miningFilter.type = e.target.value; miningPage = 1; reloadMiningList(); });
+    el.querySelector('#mn-f-status')?.addEventListener('change', e => { miningFilter.status = e.target.value; miningPage = 1; reloadMiningList(); });
+    el.querySelector('#mn-f-ed')?.addEventListener('change', e => { miningFilter.editoria_provavel = e.target.value; miningPage = 1; reloadMiningList(); });
+    el.querySelector('#mn-f-hook')?.addEventListener('change', e => { miningFilter.hook_potencial = e.target.checked ? 'true' : ''; miningPage = 1; reloadMiningList(); });
+
+    // Etiquetar
+    el.querySelector('#mn-label-btn')?.addEventListener('click', async () => {
+      const btn = el.querySelector('#mn-label-btn');
+      btn.disabled = true; btn.textContent = 'Etiquetando…';
+      try {
+        const d = await api('POST', '/editorial/mining/label', { limit: 300 });
+        toast(`${d.labeled} itens etiquetados!`);
+        if (d.errors?.length) toast(d.errors[0], 'error');
+        miningData = null; await reloadMiningList();
+      } catch (err) { toast(err.message, 'error'); }
+      finally { btn.disabled = false; btn.textContent = 'Etiquetar (IA)'; }
+    });
+
+    // Status inline
+    el.querySelectorAll('.mn-status-sel').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const id = sel.dataset.id; const status = sel.value;
+        try { await api('PATCH', `/editorial/mining/${id}`, { status }); toast('Status salvo!'); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    });
+
+    // Arquivar (botão ✕)
+    el.querySelectorAll('.mn-btn-arch').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        try {
+          await api('DELETE', `/editorial/mining/${id}`);
+          btn.closest('.mn-item').style.opacity = '0.3';
+          toast('Item arquivado.');
+          setTimeout(() => { miningData = null; reloadMiningList(); }, 800);
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+
+    // Paginação
+    el.querySelectorAll('.mn-page-btn').forEach(btn => {
+      btn.addEventListener('click', () => { miningPage = parseInt(btn.dataset.page, 10); reloadMiningList(); });
+    });
+  }
+
+  async function reloadMiningList() {
+    const listEl = el.querySelector('#mn-list');
+    if (listEl) listEl.innerHTML = '<div class="ed-loading">Carregando…</div>';
+    try { await loadMining(); if (listEl) { listEl.innerHTML = renderMiningList(); bindMiningList(); } }
+    catch (err) { if (listEl) listEl.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`; }
+  }
+
+  // ── Tab: Radar ──────────────────────────────────────
+  const SCORE_COLOR = s => s >= 8 ? 'var(--verde)' : s >= 6 ? 'var(--terracota)' : 'var(--muted)';
+
+  function renderRadar(temas) {
+    const byStatus = { pendente: [], aprovado: [], descartado: [] };
+    (temas || []).forEach(t => { (byStatus[t.status] || byStatus.pendente).push(t); });
+
+    const card = t => `
+      <div class="rd-card ${t.status}" data-id="${t.id}">
+        <div class="rd-header">
+          <div class="rd-score" style="color:${SCORE_COLOR(t.score_aderencia)}">${t.score_aderencia}/10</div>
+          <div class="rd-editoria">${EDITORIA_LABEL[t.editoria_sugerida] || t.editoria_sugerida || '?'}</div>
+          <div class="rd-date">${t.data_coleta ? new Date(t.data_coleta).toLocaleDateString('pt-BR') : ''}</div>
+          ${t.expires_at && new Date(t.expires_at) < new Date() ? '<span class="rd-expired">Expirado</span>' : ''}
+        </div>
+        <div class="rd-tema">${safeHtml(t.tema)}</div>
+        <div class="rd-resumo">${safeHtml(t.resumo || '')}</div>
+        ${t.score_justificativa ? `<div class="rd-just">${safeHtml(t.score_justificativa)}</div>` : ''}
+        ${t.fonte_url ? `<a href="${safeHtml(t.fonte_url)}" target="_blank" class="mn-source">↗ fonte</a>` : ''}
+        ${t.status === 'pendente' ? `
+          <div class="rd-actions">
+            <button class="btn btn-primary rd-aprovar" data-id="${t.id}" style="padding:4px 12px;font-size:.8rem">✓ Aprovar</button>
+            <button class="btn btn-outline rd-descartar" data-id="${t.id}" style="padding:4px 12px;font-size:.8rem">✕ Descartar</button>
+          </div>` : ''}
+      </div>`;
+
+    return `
+      <div class="ed-section">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+          <h3 class="ed-section-title" style="margin:0">Radar de Temas</h3>
+          <button id="rd-run-btn" class="btn btn-primary" style="padding:6px 14px;font-size:.85rem">▶ Rodar radar (IA + web)</button>
+          <span style="font-size:.8rem;color:var(--muted)">${temas.length} temas · validade 14 dias</span>
+        </div>
+        <div id="rd-run-result"></div>
+
+        ${byStatus.aprovado.length ? `
+          <div class="rd-section-label" style="color:var(--verde)">✓ Aprovados (${byStatus.aprovado.length})</div>
+          <div class="rd-grid">${byStatus.aprovado.map(card).join('')}</div>` : ''}
+
+        ${byStatus.pendente.length ? `
+          <div class="rd-section-label" style="margin-top:16px">⏳ Pendentes (${byStatus.pendente.length})</div>
+          <div class="rd-grid">${byStatus.pendente.map(card).join('')}</div>` : ''}
+
+        ${byStatus.descartado.length ? `
+          <details style="margin-top:16px">
+            <summary style="cursor:pointer;font-size:.85rem;color:var(--muted)">Descartados (${byStatus.descartado.length})</summary>
+            <div class="rd-grid" style="margin-top:8px;opacity:.6">${byStatus.descartado.map(card).join('')}</div>
+          </details>` : ''}
+
+        ${!temas.length ? `<div class="ed-hint" style="text-align:center;padding:40px 0">Nenhum tema ainda. Clique em "Rodar radar" para buscar.</div>` : ''}
+      </div>`;
+  }
+
+  function bindRadar() {
+    el.querySelector('#rd-run-btn')?.addEventListener('click', async () => {
+      const btn = el.querySelector('#rd-run-btn');
+      const res = el.querySelector('#rd-run-result');
+      btn.disabled = true; btn.textContent = '⏳ Pesquisando (~60s)…';
+      res.innerHTML = '';
+      try {
+        const d = await api('POST', '/editorial/radar/run', {});
+        res.innerHTML = `<div class="ed-result-box ed-result-ok">${d.temas?.length || 0} temas encontrados${d.errors?.length ? ` · ${d.errors.length} erros` : ''}</div>`;
+        toast(`${d.temas?.length || 0} temas adicionados!`);
+        setTimeout(async () => {
+          const fresh = await api('GET', '/editorial/radar');
+          el.querySelector('.ed-section').outerHTML = renderRadar(fresh);
+          bindRadar();
+        }, 400);
+      } catch (err) {
+        res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+        toast(err.message, 'error');
+      } finally { btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)'; }
+    });
+
+    el.querySelectorAll('.rd-aprovar').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try { await api('PATCH', `/editorial/radar/${btn.dataset.id}`, { status: 'aprovado' }); btn.closest('.rd-card').classList.replace('pendente','aprovado'); btn.closest('.rd-actions').remove(); toast('Tema aprovado!'); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    });
+    el.querySelectorAll('.rd-descartar').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try { await api('PATCH', `/editorial/radar/${btn.dataset.id}`, { status: 'descartado' }); btn.closest('.rd-card').style.opacity = '.3'; toast('Descartado.'); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    });
+  }
+
+  // ── Tab: Semana (wizard gamificado) ─────────────────
+  const FASE_LABEL = ['', 'Mineração', 'Pauta', 'Roteiros', 'Gravação', 'Leitura'];
+  const FASE_DESC  = ['',
+    'Subir CSV, revisar classificações, colar frases no banco, confirmar radar.',
+    'Aprovar ou trocar os 4 slots da semana.',
+    'Gerar, editar e aprovar roteiros para cada slot.',
+    'Gravar com a Evelyn. Checar itens da sessão.',
+    'Ler os números, declarar reencarnações, registrar hipótese.',
+  ];
+  const METRICA_LABEL = { envio:'Envios', seguidor:'Seguidores', salvamento:'Salvamentos', comentario:'Comentários', clique_bio:'Clique bio' };
+  const STATUS_ROTEIRO_LABEL = { rascunho:'Rascunho', aprovado:'Aprovado ✓', gravado:'Gravado', publicado:'Publicado', lido:'Lido' };
+
+  function flagChip(f) {
+    const cor = f.nivel === 'vermelho' ? '#c62828' : f.nivel === 'amarelo' ? '#e65100' : 'var(--verde)';
+    const icon = f.nivel === 'vermelho' ? '🔴' : f.nivel === 'amarelo' ? '🟡' : '🟢';
+    return `<span class="rd-flag" style="border-color:${cor};color:${cor}" title="${safeHtml(f.trecho)}">${icon} ${safeHtml(f.regra)}</span>`;
+  }
+
+  function renderSemana(data) {
+    const { semana, pautas = [], roteiros_por_pauta = {}, streak = 0, placar = {} } = data;
+    const fase = semana?.fase || 1;
+    const ini  = semana?.semana_inicio ? new Date(semana.semana_inicio).toLocaleDateString('pt-BR') : '—';
+    const fim  = semana?.semana_fim    ? new Date(semana.semana_fim).toLocaleDateString('pt-BR')    : '—';
+
+    // Barra de progresso geral
+    const progPct = Math.round(((fase - 1) / 5) * 100);
+
+    // Streak badge
+    const streakHtml = streak > 0
+      ? `<span class="sem-streak">🔥 ${streak} semana${streak !== 1 ? 's' : ''} seguida${streak !== 1 ? 's' : ''}</span>`
+      : '';
+
+    // Placar
+    const placarHtml = placar.total > 0
+      ? `<span class="sem-placar">${placar.no_alvo}/${placar.total} no alvo</span>`
+      : '';
+
+    // Fases
+    const fasesHtml = [1,2,3,4,5].map(f => {
+      const ativa   = f === fase;
+      const concl   = f < fase;
+      const futura  = f > fase;
+      return `
+        <div class="sem-fase ${ativa ? 'ativa' : concl ? 'concluida' : 'futura'}" data-fase="${f}">
+          <div class="sem-fase-num">${concl ? '✓' : f}</div>
+          <div class="sem-fase-info">
+            <div class="sem-fase-label">${FASE_LABEL[f]}</div>
+            ${ativa ? `<div class="sem-fase-desc">${FASE_DESC[f]}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    // Conteúdo da fase atual
+    let faseContent = '';
+
+    if (fase === 1) {
+      faseContent = `
+        <div class="sem-fase-body">
+          <h4>Checklist de Mineração</h4>
+          <div class="sem-checklist">
+            <label><input type="checkbox" id="chk-csv"> CSV da semana importado (ou confirmado que não há novo)</label>
+            <label><input type="checkbox" id="chk-class"> Classificações revisadas</label>
+            <label><input type="checkbox" id="chk-frases"> Frases da semana adicionadas ao banco</label>
+            <label><input type="checkbox" id="chk-radar"> Radar revisado</label>
+          </div>
+          <button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:16px" disabled>Avançar para Pauta →</button>
+        </div>`;
+    } else if (fase === 2) {
+      const slotsHtml = pautas.length === 0
+        ? `<div style="margin-bottom:12px"><button id="sem-gerar-pauta" class="btn btn-primary">Gerar pauta com IA</button></div>`
+        : pautas.map(p => `
+          <div class="sem-slot ${p.status}" data-id="${p.id}">
+            <div class="sem-slot-dia">${p.slot_dia}</div>
+            <div class="sem-slot-body">
+              <div class="sem-slot-ed">${EDITORIA_LABEL[p.editoria] || p.editoria}</div>
+              <div class="sem-slot-tese">${safeHtml(p.frase_tese || '')}</div>
+              <div class="sem-slot-meta">Meta: <strong>${METRICA_LABEL[p.metrica_alvo] || p.metrica_alvo}</strong> · ${p.formato || ''}</div>
+            </div>
+            <div class="sem-slot-actions">
+              ${p.status === 'proposto' ? `
+                <button class="btn btn-primary slt-aceitar" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">✓ Aceitar</button>
+                <button class="btn btn-outline slt-alternativa" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">↺ Alternativa</button>` : ''}
+              ${p.status === 'aceito' ? '<span style="color:var(--verde);font-size:.85rem">✓ Aceito</span>' : ''}
+            </div>
+          </div>`).join('');
+
+      const todosAceitos = pautas.length > 0 && pautas.every(p => p.status === 'aceito');
+      faseContent = `
+        <div class="sem-fase-body">
+          <h4>Pauta da Semana</h4>
+          <div id="sem-slots-wrap">${slotsHtml}</div>
+          <div id="sem-pauta-result"></div>
+          ${todosAceitos ? `<button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:12px">Avançar para Roteiros →</button>` : ''}
+        </div>`;
+    } else if (fase === 3) {
+      const roteirosHtml = pautas.map(p => {
+        const rots = roteiros_por_pauta[p.id] || [];
+        const temAprovado = rots.some(r => r.status === 'aprovado');
+        return `
+          <div class="sem-pauta-rot" data-pauta="${p.id}">
+            <div class="sem-slot-dia">${p.slot_dia}</div>
+            <div style="flex:1">
+              <div class="sem-slot-ed">${EDITORIA_LABEL[p.editoria] || p.editoria} · ${p.formato || ''}</div>
+              <div class="sem-slot-tese">${safeHtml(p.frase_tese || '')}</div>
+              ${rots.length === 0
+                ? `<button class="btn btn-outline rot-gerar" data-pauta="${p.id}" style="margin-top:8px;padding:4px 12px;font-size:.82rem">Gerar 2 roteiros (IA)</button>`
+                : rots.map(r => {
+                    const temVerm = (r.flags || []).some(f => f.nivel === 'vermelho');
+                    return `
+                      <div class="rot-card ${r.status}" data-rot="${r.id}">
+                        <div class="rot-header">
+                          <span class="rot-var">Variação ${r.variacao}</span>
+                          <select class="rot-status-sel" data-id="${r.id}" ${temVerm && r.status !== 'aprovado' ? 'title="Tem flag vermelha — corrija antes de aprovar"' : ''}>
+                            ${Object.entries(STATUS_ROTEIRO_LABEL).map(([v,l]) =>
+                              `<option value="${v}" ${r.status===v?'selected':''} ${v==='aprovado'&&temVerm?'disabled':''}>
+                                ${l}${v==='aprovado'&&temVerm?' (bloqueado 🔴)':''}
+                              </option>`
+                            ).join('')}
+                          </select>
+                        </div>
+                        <div class="rot-flags">${(r.flags||[]).map(flagChip).join('')}</div>
+                        <div class="rot-hook"><strong>Hook:</strong> ${safeHtml(r.hook||'')}</div>
+                        <div class="rot-virada"><strong>Virada:</strong> <em>${safeHtml(r.frase_do_post||'')}</em></div>
+                        <details class="rot-details">
+                          <summary>Ver roteiro completo</summary>
+                          <pre class="rot-full">${safeHtml(r.full_content||'')}</pre>
+                        </details>
+                        <div style="margin-top:8px;display:flex;gap:6px">
+                          <button class="btn btn-outline rot-edit-btn" data-id="${r.id}" style="padding:3px 10px;font-size:.78rem">Editar</button>
+                          <button class="btn btn-outline rot-export-btn" data-id="${r.id}" style="padding:3px 10px;font-size:.78rem">↓ Exportar</button>
+                        </div>
+                      </div>`;
+                  }).join('')
+              }
+            </div>
+          </div>`;
+      }).join('');
+
+      const todosAprovados = pautas.length > 0 && pautas.every(p => (roteiros_por_pauta[p.id]||[]).some(r => r.status === 'aprovado'));
+      faseContent = `
+        <div class="sem-fase-body">
+          <h4>Roteiros</h4>
+          <div id="sem-rot-wrap">${roteirosHtml}</div>
+          <div id="sem-rot-result"></div>
+          ${todosAprovados ? `<button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:12px">Avançar para Gravação →</button>` : ''}
+        </div>`;
+    } else if (fase === 4) {
+      const gravacaoItems = pautas.map(p => {
+        const rotAprovado = (roteiros_por_pauta[p.id]||[]).find(r => r.status === 'aprovado');
+        return `
+          <div class="sem-grav-item">
+            <input type="checkbox" class="grav-chk" data-pauta="${p.id}" ${(semana?.estado?.fase4?.gravados||[]).includes(String(p.id)) ? 'checked' : ''}>
+            <div>
+              <strong>${p.slot_dia} — ${EDITORIA_LABEL[p.editoria]||p.editoria}</strong>
+              ${rotAprovado ? `<div style="font-size:.82rem;color:var(--muted);margin-top:3px">Hook: ${safeHtml((rotAprovado.hook||'').slice(0,80))}</div>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+
+      faseContent = `
+        <div class="sem-fase-body">
+          <h4>Sessão de Gravação</h4>
+          <p class="ed-hint">Check quando gravar. Lembre de b-roll + hooks extras para semana seguinte.</p>
+          <div class="sem-grav-list" id="grav-list">${gravacaoItems}</div>
+          <button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:16px">Avançar para Leitura →</button>
+        </div>`;
+    } else if (fase === 5) {
+      faseContent = `
+        <div class="sem-fase-body">
+          <h4>Leitura da Semana</h4>
+          <p class="ed-hint">Compare realizado vs meta. Declare reencarnações. Registre 1 hipótese.</p>
+          <div class="sem-leitura">
+            ${pautas.map(p => `
+              <div class="sem-leit-slot">
+                <div class="sem-slot-dia">${p.slot_dia}</div>
+                <div>
+                  <div class="sem-slot-ed">${EDITORIA_LABEL[p.editoria]||p.editoria} · meta: <strong>${METRICA_LABEL[p.metrica_alvo]||p.metrica_alvo}</strong></div>
+                  <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:.85rem">
+                    <input type="checkbox" class="leit-alvo-chk" data-pauta="${p.id}"> Atingiu a meta
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:.85rem">
+                    <input type="checkbox" class="leit-reenc-chk" data-pauta="${p.id}"> Reencarnar este post
+                  </label>
+                </div>
+              </div>`).join('')}
+          </div>
+          <div style="margin-top:16px">
+            <label class="ed-hint">Hipótese nova para próxima semana (máx 1):</label>
+            <textarea id="leit-hipotese" class="ed-textarea" rows="2" style="margin-top:6px">${safeHtml(semana?.estado?.fase5?.hipotese||'')}</textarea>
+          </div>
+          <button id="sem-fechar-btn" class="btn btn-primary" style="margin-top:12px">Fechar semana ✓</button>
+        </div>`;
+    }
+
+    return `
+      <div class="ed-section">
+        <div class="sem-top">
+          <div>
+            <h3 class="ed-section-title">Semana ${ini} – ${fim}</h3>
+            <div style="display:flex;gap:10px;margin-top:4px">${streakHtml}${placarHtml}</div>
+          </div>
+          <button id="sem-seed-btn" class="btn btn-outline" style="font-size:.78rem;padding:4px 10px" title="Popular com dados de exemplo">Seed exemplo</button>
+        </div>
+
+        <div class="sem-progress-bar"><div style="width:${progPct}%;background:var(--verde);height:100%;border-radius:4px;transition:width .4s"></div></div>
+        <div class="sem-fases">${fasesHtml}</div>
+
+        <div id="sem-fase-content">${faseContent}</div>
+      </div>`;
+  }
+
+  function bindSemana(data) {
+    const { semana, pautas = [] } = data;
+    const semanaId = semana?.id;
+
+    // Seed
+    el.querySelector('#sem-seed-btn')?.addEventListener('click', async () => {
+      if (!confirm('Popular banco com dados de exemplo? Só insere se banco estiver vazio.')) return;
+      try { const d = await api('POST', '/editorial/seed', {}); toast(d.seeded ? 'Seed feito!' : d.reason); }
+      catch (err) { toast(err.message, 'error'); }
+    });
+
+    // Fase 1: checklist
+    const chks = ['chk-csv','chk-class','chk-frases','chk-radar'];
+    function checkFase1() {
+      const btn = el.querySelector('#sem-avancar-btn');
+      if (btn) btn.disabled = !chks.every(id => el.querySelector(`#${id}`)?.checked);
+    }
+    chks.forEach(id => el.querySelector(`#${id}`)?.addEventListener('change', checkFase1));
+
+    // Avançar fase genérico
+    el.querySelector('#sem-avancar-btn')?.addEventListener('click', async () => {
+      const btn = el.querySelector('#sem-avancar-btn');
+      btn.disabled = true; btn.textContent = 'Avançando…';
+      try {
+        await api('POST', '/editorial/semana/avancar', { dados: {} });
+        toast('Fase avançada!');
+        const fresh = await api('GET', '/editorial/semana');
+        el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+        bindSemana(fresh);
+      } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = 'Avançar →'; }
+    });
+
+    // Fase 2: gerar pauta
+    el.querySelector('#sem-gerar-pauta')?.addEventListener('click', async () => {
+      const btn = el.querySelector('#sem-gerar-pauta');
+      btn.disabled = true; btn.textContent = 'Gerando pauta (IA)…';
+      try {
+        await api('POST', '/editorial/pautas/gerar', { semana_id: semanaId });
+        toast('Pauta gerada!');
+        const fresh = await api('GET', '/editorial/semana');
+        el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+        bindSemana(fresh);
+      } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = 'Gerar pauta com IA'; }
+    });
+
+    // Fase 2: aceitar/trocar slot
+    el.querySelectorAll('.slt-aceitar').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('PATCH', `/editorial/pautas/${btn.dataset.id}`, { status: 'aceito' });
+          btn.closest('.sem-slot').classList.replace('proposto','aceito');
+          btn.closest('.sem-slot-actions').innerHTML = '<span style="color:var(--verde);font-size:.85rem">✓ Aceito</span>';
+          // check if all accepted
+          const slots = el.querySelectorAll('.sem-slot');
+          const allAceito = [...slots].every(s => s.classList.contains('aceito'));
+          if (allAceito && !el.querySelector('#sem-avancar-btn')) {
+            el.querySelector('#sem-slots-wrap').insertAdjacentHTML('afterend',
+              '<button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:12px">Avançar para Roteiros →</button>');
+            el.querySelector('#sem-avancar-btn').addEventListener('click', async () => {
+              await api('POST', '/editorial/semana/avancar', { dados: {} });
+              toast('Avançando!');
+              const fresh = await api('GET', '/editorial/semana');
+              el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+              bindSemana(fresh);
+            });
+          }
+          toast('Slot aceito!');
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+    el.querySelectorAll('.slt-alternativa').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '↺ Gerando…';
+        try {
+          // Re-gerar pauta completa; por ora remove todos e gera novo
+          await api('POST', '/editorial/pautas/gerar', { semana_id: semanaId, forcar: true });
+          toast('Nova sugestão gerada!');
+          const fresh = await api('GET', '/editorial/semana');
+          el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+          bindSemana(fresh);
+        } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = '↺ Alternativa'; }
+      });
+    });
+
+    // Fase 3: gerar roteiros por slot
+    el.querySelectorAll('.rot-gerar').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const pautaId = btn.dataset.pauta;
+        btn.disabled = true; btn.textContent = 'Gerando (~30s)…';
+        const res = el.querySelector('#sem-rot-result');
+        try {
+          await api('POST', `/editorial/pautas/${pautaId}/roteiros`, {});
+          toast('Roteiros gerados!');
+          const fresh = await api('GET', '/editorial/semana');
+          el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+          bindSemana(fresh);
+        } catch (err) {
+          res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+          toast(err.message, 'error');
+          btn.disabled = false; btn.textContent = 'Gerar 2 roteiros (IA)';
+        }
+      });
+    });
+
+    // Fase 3: status roteiro
+    el.querySelectorAll('.rot-status-sel').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        try {
+          await api('PATCH', `/editorial/roteiros/${sel.dataset.id}`, { status: sel.value });
+          toast('Status salvo!');
+          if (sel.value === 'aprovado') {
+            sel.closest('.rot-card').classList.add('aprovado');
+            // re-render to check if all approved
+            const fresh = await api('GET', '/editorial/semana');
+            el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+            bindSemana(fresh);
+          }
+        } catch (err) { toast(err.message, 'error'); sel.value = sel.dataset.prev || 'rascunho'; }
+      });
+      sel.dataset.prev = sel.value;
+    });
+
+    // Fase 3: exportar roteiro
+    el.querySelectorAll('.rot-export-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const res = await fetch('/api/editorial/roteiros/' + btn.dataset.id + '/export', {
+            headers: { Authorization: 'Bearer ' + state.token }
+          });
+          const text = await res.text();
+          const blob = new Blob([text], { type: 'text/plain' });
+          const url  = URL.createObjectURL(blob);
+          const a    = document.createElement('a');
+          a.href = url; a.download = `roteiro_${btn.dataset.id}.txt`; a.click();
+          URL.revokeObjectURL(url);
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+
+    // Fase 4: gravação checklist
+    el.querySelectorAll('.grav-chk').forEach(chk => {
+      chk.addEventListener('change', async () => {
+        const gravados = [...el.querySelectorAll('.grav-chk:checked')].map(c => c.dataset.pauta);
+        try { await api('POST', '/editorial/semana/avancar', { dados: { fase4: { gravados } } }); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    });
+
+    // Fase 5: fechar semana
+    el.querySelector('#sem-fechar-btn')?.addEventListener('click', async () => {
+      const hipotese = el.querySelector('#leit-hipotese')?.value || '';
+      const noAlvo   = [...el.querySelectorAll('.leit-alvo-chk:checked')].map(c => c.dataset.pauta);
+      const reenc    = [...el.querySelectorAll('.leit-reenc-chk:checked')].map(c => c.dataset.pauta);
+      const btn = el.querySelector('#sem-fechar-btn');
+      btn.disabled = true; btn.textContent = 'Fechando…';
+      try {
+        await api('POST', '/editorial/semana/avancar', { dados: { fase5: { hipotese, no_alvo: noAlvo, reencarnacoes: reenc, leitura_feita: true } } });
+        toast('Semana fechada! 🎉');
+        const fresh = await api('GET', '/editorial/semana');
+        el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+        bindSemana(fresh);
+      } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = 'Fechar semana ✓'; }
+    });
+  }
+
+  // ── Render principal ────────────────────────────────
+  async function render() {
+    el.innerHTML = `
+      <div class="ed-page">
+        <div class="ed-header">
+          <h2 class="ed-page-title">Editorial Engine <span style="color:var(--terracota)">@nutrievelynliu</span></h2>
+          <button id="ed-refresh" class="btn btn-outline" style="padding:6px 14px;font-size:.82rem">↺ Atualizar</button>
+        </div>
+        ${renderTabs()}
+        <div id="ed-tab-content">
+          ${activeTab === 'upload' ? renderUpload() : '<div class="ed-loading">Carregando…</div>'}
+        </div>
+      </div>`;
+
+    bindTabs();
+
+    el.querySelector('#ed-refresh')?.addEventListener('click', () => {
+      analyticsData = null; postsData = null; render();
+    });
+
+    const tabContent = el.querySelector('#ed-tab-content');
+
+    if (activeTab === 'upload') {
+      bindUpload();
+    } else if (activeTab === 'posts') {
+      try {
+        if (!postsData) await loadPosts();
+        tabContent.innerHTML = renderPostsTab();
+        bindPosts();
+      } catch (err) {
+        tabContent.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+      }
+    } else if (activeTab === 'mining') {
+      tabContent.innerHTML = renderMiningTab();
+      try {
+        if (!miningData) await loadMining();
+        el.querySelector('#mn-list').innerHTML = renderMiningList();
+      } catch (err) {
+        el.querySelector('#mn-list').innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+      }
+      bindMining();
+    } else if (activeTab === 'radar') {
+      try {
+        tabContent.innerHTML = '<div class="ed-loading">Carregando radar…</div>';
+        const data = await api('GET', '/editorial/radar');
+        tabContent.innerHTML = renderRadar(data);
+        bindRadar();
+      } catch (err) {
+        tabContent.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+      }
+    } else if (activeTab === 'semana') {
+      try {
+        tabContent.innerHTML = '<div class="ed-loading">Carregando semana…</div>';
+        const data = await api('GET', '/editorial/semana');
+        tabContent.innerHTML = renderSemana(data);
+        bindSemana(data);
+      } catch (err) {
+        tabContent.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+      }
+    } else {
+      try {
+        if (!analyticsData) await loadAnalytics();
+        tabContent.innerHTML = renderDashboard();
+        bindDashboard();
+      } catch (err) {
+        tabContent.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
+      }
+    }
+  }
+
+  await render();
 }
 
 // ── Boot ───────────────────────────────────────────────

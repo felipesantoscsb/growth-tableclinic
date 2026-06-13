@@ -65,6 +65,7 @@ app.use('/api/market', require('./routes/market'));
 app.use('/api/insights', require('./routes/insights'));
 app.use('/api/edit', require('./routes/edit'));
 app.use('/api/users', require('./routes/users'));
+app.use('/api/editorial', require('./routes/editorial'));
 
 // Cache-busting: injeta a versão (mtime) de app.js/style.css nas URLs dos assets.
 // Cada deploy muda o mtime → a URL muda → navegador/CDN não servem versão velha.
@@ -134,6 +135,101 @@ async function bootstrap() {
       copies JSONB NOT NULL DEFAULT '[]',
       created_by INT REFERENCES users(id),
       created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_posts (
+      id SERIAL PRIMARY KEY,
+      post_id VARCHAR(255) UNIQUE NOT NULL,
+      account_username VARCHAR(100) NOT NULL DEFAULT 'nutrievelynliu',
+      description TEXT,
+      duration_s INT DEFAULT 0,
+      published_at TIMESTAMPTZ,
+      permalink TEXT,
+      post_type VARCHAR(50),
+      date DATE,
+      views INT DEFAULT 0,
+      reach INT DEFAULT 0,
+      likes INT DEFAULT 0,
+      shares INT DEFAULT 0,
+      follows INT DEFAULT 0,
+      comments INT DEFAULT 0,
+      saves INT DEFAULT 0,
+      editoria VARCHAR(50),
+      editoria_manual BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_semanas (
+      id SERIAL PRIMARY KEY,
+      semana_inicio DATE UNIQUE NOT NULL,
+      semana_fim DATE NOT NULL,
+      fase INT DEFAULT 1,
+      estado JSONB DEFAULT '{}',
+      streak INT DEFAULT 0,
+      placar_posts_no_alvo INT DEFAULT 0,
+      placar_posts_total INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_mining_items (
+      id SERIAL PRIMARY KEY,
+      type VARCHAR(30) NOT NULL CHECK (type IN ('frase_de_seguidora','referencia_formato','noticia','ideia_solta')),
+      content TEXT NOT NULL,
+      source_url TEXT,
+      expires_at DATE,
+      tema VARCHAR(100),
+      dor VARCHAR(100),
+      editoria_provavel VARCHAR(50),
+      hook_potencial BOOLEAN DEFAULT FALSE,
+      status VARCHAR(20) DEFAULT 'novo' CHECK (status IN ('novo','usado','arquivado')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_temas_radar (
+      id SERIAL PRIMARY KEY,
+      tema TEXT NOT NULL,
+      resumo TEXT,
+      fonte_url TEXT,
+      data_coleta DATE,
+      expires_at DATE,
+      score_aderencia INT,
+      score_justificativa TEXT,
+      editoria_sugerida VARCHAR(50),
+      status VARCHAR(20) DEFAULT 'pendente' CHECK (status IN ('pendente','aprovado','descartado')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_pautas (
+      id SERIAL PRIMARY KEY,
+      semana_id INT REFERENCES editorial_semanas(id) ON DELETE CASCADE,
+      slot_dia VARCHAR(10),
+      editoria VARCHAR(50),
+      formato VARCHAR(30),
+      frase_tese TEXT,
+      metrica_alvo VARCHAR(30),
+      fontes JSONB DEFAULT '[]',
+      status VARCHAR(20) DEFAULT 'proposto' CHECK (status IN ('proposto','aceito','trocado')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS editorial_roteiros (
+      id SERIAL PRIMARY KEY,
+      pauta_id INT REFERENCES editorial_pautas(id) ON DELETE CASCADE,
+      variacao INT DEFAULT 1,
+      hook TEXT,
+      tensao TEXT,
+      virada TEXT,
+      frase_do_post TEXT,
+      absolvicao TEXT,
+      fechamento TEXT,
+      full_content TEXT,
+      flags JSONB DEFAULT '[]',
+      status VARCHAR(20) DEFAULT 'rascunho' CHECK (status IN ('rascunho','aprovado','gravado','publicado','lido')),
+      mining_refs JSONB DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
   console.log('[bootstrap] Migrations OK');
