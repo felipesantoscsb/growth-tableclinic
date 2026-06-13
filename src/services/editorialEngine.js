@@ -105,6 +105,11 @@ function normalizeHeader(h) {
   return h.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
+// COL_MAP com chaves normalizadas (sem acento) — o header do CSV também é
+// normalizado, então a comparação precisa ser acento-insensível dos dois lados.
+const COL_MAP_NORM = {};
+for (const [k, v] of Object.entries(COL_MAP)) COL_MAP_NORM[normalizeHeader(k)] = v;
+
 function parseInt_(v) {
   const n = parseInt(String(v).replace(/\D/g, ''), 10);
   return isNaN(n) ? 0 : n;
@@ -123,7 +128,7 @@ function csvToObjects(csvText) {
   const headers = rows[0].map(normalizeHeader);
   const colIdx = {};
   headers.forEach((h, i) => {
-    const mapped = COL_MAP[h];
+    const mapped = COL_MAP_NORM[h];
     if (mapped) colIdx[mapped] = i;
   });
 
