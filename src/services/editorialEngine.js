@@ -617,66 +617,71 @@ const RADAR_QUERIES_DEFAULT = [
 
 const RADAR_SYSTEM = `Você analisa temas para @nutrievelynliu, nutricionista comportamental (os 4 padrões, GLP-1, absolvição). Score de aderência = o tema permite à Evelyn dizer algo que SÓ a tese dela diz? Responda SOMENTE JSON: { tema, resumo, fonte_url, score_aderencia, score_justificativa, editoria_sugerida }`;
 
+// Processa UMA query: web search (com fallback) → parse → insert. Retorna o tema inserido.
+async function runRadarQuery(query) {
+  let text;
+  try {
+    const msg = await client.beta.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: RADAR_SYSTEM,
+      messages: [{ role: 'user', content: `Pesquise e analise: ${query}` }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    }, { headers: { 'anthropic-beta': 'web-search-2025-03-05' } });
+    text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  } catch (_webErr) {
+    const fallback = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: RADAR_SYSTEM,
+      messages: [{ role: 'user', content: `Com base no seu conhecimento atual, analise o tema: ${query}` }],
+    });
+    text = fallback.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  }
+
+  const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(clean); }
+  catch { const m = clean.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error('JSON inválido'); }
+
+  const score = Number(parsed.score_aderencia) || 0;
+  const status = score <= 5 ? 'descartado' : 'pendente';
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 14);
+
+  const { rows } = await db.query(
+    `INSERT INTO editorial_temas_radar
+       (tema, resumo, fonte_url, score_aderencia, score_justificativa, editoria_sugerida, status, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [
+      parsed.tema || query,
+      parsed.resumo || null,
+      parsed.fonte_url || null,
+      score,
+      parsed.score_justificativa || null,
+      parsed.editoria_sugerida || null,
+      status,
+      expiresAt.toISOString(),
+    ]
+  );
+  return rows[0];
+}
+
+// Roda todas as queries EM PARALELO (Promise.allSettled) — 5 web searches serial
+// estouravam o timeout do proxy. Cada query é independente; falha de uma não derruba as outras.
 async function runRadar(customQueries = null) {
   const queries = customQueries && Array.isArray(customQueries) && customQueries.length > 0
     ? customQueries
     : RADAR_QUERIES_DEFAULT;
 
+  const settled = await Promise.allSettled(queries.map(q => runRadarQuery(q)));
+
   const temas = [];
   const errors = [];
-
-  for (const query of queries) {
-    try {
-      let text;
-      try {
-        const msg = await client.beta.messages.create({
-          model: MODEL,
-          max_tokens: 1024,
-          system: RADAR_SYSTEM,
-          messages: [{ role: 'user', content: `Pesquise e analise: ${query}` }],
-          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        }, { headers: { 'anthropic-beta': 'web-search-2025-03-05' } });
-        text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      } catch (_webErr) {
-        const fallback = await client.messages.create({
-          model: MODEL,
-          max_tokens: 1024,
-          system: RADAR_SYSTEM,
-          messages: [{ role: 'user', content: `Com base no seu conhecimento atual, analise o tema: ${query}` }],
-        });
-        text = fallback.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      }
-
-      const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      let parsed;
-      try { parsed = JSON.parse(clean); }
-      catch { const m = clean.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error('JSON inválido'); }
-
-      const score = Number(parsed.score_aderencia) || 0;
-      const status = score <= 5 ? 'descartado' : 'pendente';
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 14);
-
-      const { rows } = await db.query(
-        `INSERT INTO editorial_temas_radar
-           (tema, resumo, fonte_url, score_aderencia, score_justificativa, editoria_sugerida, status, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [
-          parsed.tema || query,
-          parsed.resumo || null,
-          parsed.fonte_url || null,
-          score,
-          parsed.score_justificativa || null,
-          parsed.editoria_sugerida || null,
-          status,
-          expiresAt.toISOString(),
-        ]
-      );
-      temas.push(rows[0]);
-    } catch (err) {
-      errors.push({ query, error: err.message });
-    }
-  }
+  settled.forEach((r, i) => {
+    if (r.status === 'fulfilled') temas.push(r.value);
+    else errors.push({ query: queries[i], error: r.reason?.message || String(r.reason) });
+  });
 
   return { temas, errors };
 }
@@ -892,10 +897,15 @@ async function getSemanaAtual() {
   );
   if (rows.length > 0) return rows[0];
 
+  // semana_fim = domingo (segunda + 6 dias) — coluna é NOT NULL
+  const sundayDate = new Date(monday);
+  sundayDate.setDate(sundayDate.getDate() + 6);
+  const sunday = sundayDate.toISOString().slice(0, 10);
+
   const { rows: inserted } = await db.query(
-    `INSERT INTO editorial_semanas (semana_inicio, fase, estado)
-     VALUES ($1, 1, '{}') RETURNING *`,
-    [monday]
+    `INSERT INTO editorial_semanas (semana_inicio, semana_fim, fase, estado)
+     VALUES ($1, $2, 1, '{}') RETURNING *`,
+    [monday, sunday]
   );
   return inserted[0];
 }

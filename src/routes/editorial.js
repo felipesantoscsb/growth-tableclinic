@@ -3,6 +3,7 @@
  * Prefixo: /api/editorial
  */
 const router = require('express').Router();
+const { randomUUID } = require('crypto');
 const db     = require('../models/db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
@@ -28,6 +29,15 @@ const {
 
 // Todas as rotas exigem auth; classify/upload exigem admin ou evelyn
 router.use(authMiddleware);
+
+// Jobs do radar em memória (processo único) — radar roda 5 web searches que
+// estouram o timeout do proxy se aguardados na request. Front consulta /radar/status.
+const radarJobs = new Map();
+const RADAR_JOB_TTL_MS = 30 * 60 * 1000;
+function cleanRadarJobs() {
+  const cutoff = Date.now() - RADAR_JOB_TTL_MS;
+  for (const [id, j] of radarJobs) if (j.createdAt < cutoff) radarJobs.delete(id);
+}
 
 // ── POST /api/editorial/upload-csv ────────────────────────────────────────
 // Body: { csv: "<texto do CSV>" }
@@ -315,15 +325,30 @@ router.get('/radar', async (req, res) => {
 });
 
 // ── POST /api/editorial/radar/run ────────────────────────────────────────
-router.post('/radar/run', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
-  try {
-    const { queries } = req.body || {};
-    const result = await runRadar(queries || null);
-    ok(res, result);
-  } catch (e) {
-    console.error('[editorial/radar/run]', e.message);
-    fail(res, e.message);
-  }
+// Inicia o radar em background e devolve job_id na hora (evita timeout do proxy).
+router.post('/radar/run', requireRole('admin', 'evelyn', 'editor'), (req, res) => {
+  cleanRadarJobs();
+  const { queries } = req.body || {};
+  const jobId = randomUUID();
+  radarJobs.set(jobId, { status: 'processing', createdAt: Date.now() });
+
+  runRadar(queries || null)
+    .then(result => radarJobs.set(jobId, { status: 'done', createdAt: Date.now(), result }))
+    .catch(e => {
+      console.error('[editorial/radar/run]', e.message);
+      radarJobs.set(jobId, { status: 'error', createdAt: Date.now(), error: e.message });
+    });
+
+  ok(res, { job_id: jobId, status: 'processing' });
+});
+
+// ── GET /api/editorial/radar/status/:jobId ───────────────────────────────
+router.get('/radar/status/:jobId', (req, res) => {
+  const j = radarJobs.get(req.params.jobId);
+  if (!j) return fail(res, 'Job não encontrado ou expirado', 404);
+  if (j.status === 'done')  return ok(res, { status: 'done', ...j.result });
+  if (j.status === 'error') return ok(res, { status: 'error', error: j.error });
+  ok(res, { status: 'processing' });
 });
 
 // ── PATCH /api/editorial/radar/:id ───────────────────────────────────────

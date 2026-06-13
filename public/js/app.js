@@ -1788,20 +1788,48 @@ async function editorial(el) {
       const btn = el.querySelector('#rd-run-btn');
       const res = el.querySelector('#rd-run-result');
       btn.disabled = true; btn.textContent = '⏳ Pesquisando (~60s)…';
-      res.innerHTML = '';
+      res.innerHTML = '<div class="ed-result-box">Radar rodando em segundo plano… pode levar até ~90s.</div>';
       try {
-        const d = await api('POST', '/editorial/radar/run', {});
-        res.innerHTML = `<div class="ed-result-box ed-result-ok">${d.temas?.length || 0} temas encontrados${d.errors?.length ? ` · ${d.errors.length} erros` : ''}</div>`;
-        toast(`${d.temas?.length || 0} temas adicionados!`);
-        setTimeout(async () => {
+        // Inicia job async — devolve job_id na hora (não trava no proxy)
+        const { job_id } = await api('POST', '/editorial/radar/run', {});
+        if (!job_id) throw new Error('Falha ao iniciar o radar');
+
+        // Polling do status (a cada 3s, teto de 3min)
+        const started = Date.now();
+        const poll = async () => {
+          let st;
+          try { st = await api('GET', `/editorial/radar/status/${job_id}`); }
+          catch (err) { res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)'; return; }
+
+          if (st.status === 'processing') {
+            if (Date.now() - started > 180_000) {
+              res.innerHTML = `<div class="ed-result-box ed-result-err">Radar demorou demais. Tente novamente.</div>`;
+              btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)';
+              return;
+            }
+            return setTimeout(poll, 3000);
+          }
+
+          if (st.status === 'error') {
+            res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(st.error || 'Erro no radar')}</div>`;
+            btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)';
+            return;
+          }
+
+          // done
+          const n = st.temas?.length || 0;
+          res.innerHTML = `<div class="ed-result-box ed-result-ok">${n} temas encontrados${st.errors?.length ? ` · ${st.errors.length} erros` : ''}</div>`;
+          toast(`${n} temas adicionados!`);
           const fresh = await api('GET', '/editorial/radar');
           el.querySelector('.ed-section').outerHTML = renderRadar(fresh);
           bindRadar();
-        }, 400);
+        };
+        setTimeout(poll, 3000);
       } catch (err) {
         res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(err.message)}</div>`;
         toast(err.message, 'error');
-      } finally { btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)'; }
+        btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)';
+      }
     });
 
     el.querySelectorAll('.rd-aprovar').forEach(btn => {
