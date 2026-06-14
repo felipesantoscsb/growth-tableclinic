@@ -346,7 +346,7 @@ function secToSrtTime(s) {
 // em unidade de sentido (pontuação), 800–3500ms, sincronizadas na 1ª palavra.
 function buildCaptionSrt(words) {
   const ws = (Array.isArray(words) ? words : [])
-    .map(w => ({ text: String(w.word ?? w.text ?? '').trim(), start: Number(w.start), end: Number(w.end) }))
+    .map(w => ({ text: VE.cleanWordToken(w.word ?? w.text), start: Number(w.start), end: Number(w.end) }))
     .filter(w => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
   if (ws.length === 0) return '';
 

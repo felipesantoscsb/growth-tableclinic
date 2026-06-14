@@ -60,12 +60,18 @@ function detectTimestampGranularity(whisperOutput) {
   return 'segment_only';
 }
 
+// Limpa um TOKEN de palavra do Whisper: tira pontuação/espaço solto no INÍCIO
+// (o whisper-1 às vezes devolve ",palavra" colado) mas preserva o final (",", ".").
+function cleanWordToken(raw) {
+  return String(raw ?? '').replace(/^[\s,;:."'¿¡«»\-–—]+/, '').trim();
+}
+
 // Normaliza qualquer shape do Whisper para uma lista plana de palavras {text,start,end}
 function flattenWords(whisperOutput) {
   const o = whisperOutput || {};
   if (Array.isArray(o.words) && o.words.length) {
     return o.words
-      .map(w => ({ text: String(w.word ?? w.text ?? '').trim(), start: +w.start, end: +w.end }))
+      .map(w => ({ text: cleanWordToken(w.word ?? w.text), start: +w.start, end: +w.end }))
       .filter(w => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
   }
   if (Array.isArray(o.segments)) {
@@ -73,7 +79,7 @@ function flattenWords(whisperOutput) {
     for (const s of o.segments) {
       if (Array.isArray(s.words) && s.words.length) {
         for (const w of s.words) {
-          const t = String(w.word ?? w.text ?? '').trim();
+          const t = cleanWordToken(w.word ?? w.text);
           if (t && Number.isFinite(+w.start) && Number.isFinite(+w.end)) out.push({ text: t, start: +w.start, end: +w.end });
         }
       }
@@ -630,6 +636,7 @@ module.exports = {
   DEFAULTS,
   AGGRESSION_GAP_S,
   detectTimestampGranularity,
+  cleanWordToken,
   flattenWords,
   approxWordsFromSegments,
   resegmentCaptions,
