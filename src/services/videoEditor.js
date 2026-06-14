@@ -207,6 +207,9 @@ function parseInstructions(instructions, duration) {
 
   if (text.match(/preto\s+e\s+branco|grayscale|cinza|b&w/i)) ops.grayscale = true;
 
+  // Zoom de retenção (opt-in): só quando pedido explicitamente.
+  if (text.match(/zoom|dinamic|retenc|movimento|pattern\s*interrupt/i)) ops.autoZoom = true;
+
   return ops;
 }
 
@@ -745,14 +748,44 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
     }
   }
 
-  // ── Ritmo visual (análise; zoom = sugestão, não auto-aplicado) ─────────────
+  // ── Ritmo visual (análise) ─────────────────────────────────────────────────
+  let stalled = [];
   try {
     const finalDur = await getVideoDuration(outputPath);
     const events = [];
     if (report.captions?.captionStarts) events.push(...report.captions.captionStarts);
     const vr = VE.analyzeVisualRhythm(finalDur, events, cfg);
     report.visualRhythm = vr;
+    stalled = vr.trechos_parados || [];
   } catch (e) { report.fallbacks.push(`ritmo visual: ${e.message}`); }
+
+  // ── Zoom de retenção (OPT-IN: só quando pedido) — heurística, sem ML ───────
+  if (ops.autoZoom && stalled.length) {
+    try {
+      const dims = await getVideoDims(outputPath);
+      const focalY = dims.h && dims.w && dims.h >= dims.w ? 0.38 : 0.5; // rosto + alto no vertical
+      const zf = VE.buildRetentionZoom(stalled, { w: dims.w, h: dims.h, focalY });
+      if (zf) {
+        const zoomed = path.join(sessionDir, 'zoomed.mp4');
+        await new Promise((resolve, reject) => {
+          ffmpeg(outputPath)
+            .videoFilters(zf)
+            .outputOptions(['-c:v libx264', '-preset fast', '-crf 20', '-c:a copy', '-movflags +faststart', '-pix_fmt yuv420p'])
+            .output(zoomed)
+            .on('start', () => console.log('[FFmpeg] Zoom de retenção (heurística)...'))
+            .on('end', resolve).on('error', reject).run();
+        });
+        fs.copyFileSync(zoomed, outputPath);
+        try { fs.unlinkSync(zoomed); } catch {}
+        report.zoom = { applied: true, windows: stalled.length, focalY };
+      }
+    } catch (e) {
+      report.fallbacks.push(`zoom de retenção falhou (mantido sem zoom): ${e.message}`);
+      report.zoom = { applied: false, error: e.message };
+    }
+  } else if (ops.autoZoom) {
+    report.zoom = { applied: false, reason: 'nenhum trecho parado >2.5s' };
+  }
 
   const finalDuration = await getVideoDuration(outputPath);
   const stat = fs.statSync(outputPath);

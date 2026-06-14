@@ -530,12 +530,36 @@ function analyzeVisualRhythm(duration, events, cfg = {}) {
 }
 
 // Filtro de zoom suave centralizado (zoompan) para um trecho [start,end].
-// Arquitetura permite trocar center por coords de face-tracking no futuro.
+// (legado — mantido p/ compat). Use buildRetentionZoom p/ múltiplas janelas.
 function buildZoomFilter(start, end, fps = 30, from = 1.0, to = 1.08, rampS = 0.5) {
   const rampFrames = Math.max(1, Math.round(rampS * fps));
-  // z cresce de `from` a `to` ao longo de rampFrames e segura em `to`
   const z = `min(${from}+(${(to - from).toFixed(4)})*on/${rampFrames}\\,${to})`;
   return `zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:fps=${fps}`;
+}
+
+// Zoom de retenção time-aware (crop+scale) aplicado SÓ nas janelas paradas.
+// Ponto focal heurístico (sem ML): centro-X, focalY do topo (0.38 vertical typ.
+// p/ talking head). z(t) sobe de 1.0→`to` em rampS dentro de cada janela e
+// volta a 1.0 fora. Wrapped pelo chamador; opt-in.
+function buildRetentionZoom(windows, { w, h, to = 1.08, rampS = 0.5, focalY = 0.38 } = {}) {
+  const wins = (windows || []).filter(g => g && g.end > g.start);
+  if (!wins.length || !w || !h) return null;
+  // expressão de fator de zoom: max das rampas de cada janela, default 1.0
+  let z = '1.0';
+  for (const g of wins) {
+    const s = g.start.toFixed(3), e = g.end.toFixed(3);
+    const ramp = `min(1.0+${(to - 1).toFixed(4)}*(t-${s})/${rampS}\\,${to})`;
+    const inWin = `if(between(t\\,${s}\\,${e})\\,${ramp}\\,1.0)`;
+    z = `max(${inWin}\\,${z})`;
+  }
+  // crop centrado em X e em focalY no Y; depois reescala ao tamanho original
+  const fx = '0.5';
+  const fy = focalY.toFixed(3);
+  const cw = `iw/(${z})`;
+  const ch = `ih/(${z})`;
+  const cx = `(iw-${cw})*${fx}`;
+  const cy = `(ih-${ch})*${fy}`;
+  return `crop=w='${cw}':h='${ch}':x='${cx}':y='${cy}',scale=${w}:${h}`;
 }
 
 // Re-mapeia tempos das palavras para o timeline APÓS o corte (keep segments).
@@ -598,6 +622,7 @@ module.exports = {
   buildKeepFilter,
   analyzeVisualRhythm,
   buildZoomFilter,
+  buildRetentionZoom,
   remapWordsThroughKeep,
   writeEdl,
 };
