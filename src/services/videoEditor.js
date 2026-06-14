@@ -580,9 +580,11 @@ async function buildOptimizedCaptions(words, sessionDir, cfg = {}) {
   // DIAGNÓSTICO (build 536adf7+): mostra o texto REAL que vai pro ASS — se houver
   // vírgula no início aqui, é código; se não houver aqui mas aparecer no vídeo,
   // é build velho/cache servindo no Railway.
-  const dlg = ass.split('\n').filter(l => l.startsWith('Dialogue:')).slice(0, 6)
-    .map(l => l.split(',').slice(9).join(',')); // campo Text (após 9 vírgulas)
+  const dlg = ass.split('\n').filter(l => l.startsWith('Dialogue:')).slice(0, 4)
+    .map(l => l.split(',').slice(9).join(','));
   console.log('[caption-debug] ASS Text real:', JSON.stringify(dlg));
+  // char codes dos 4 primeiros chars de cada Text — revela byte oculto/combinante
+  dlg.forEach((t, i) => console.log(`[caption-debug] codes#${i}:`, [...t.slice(0, 4)].map(ch => ch.charCodeAt(0))));
   return { assPath, report, blocks };
 }
 
