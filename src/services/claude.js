@@ -50,39 +50,54 @@ function voiceForUser(role, nutri_name) {
   return VOICE_EVELYN;
 }
 
+// Critérios editoriais — MESMO padrão do módulo de Linha Editorial (roteirista
+// @nutrievelynliu). Aplicado ao Gerador e aos Anúncios para consistência total.
+const ROTEIRO_CRITERIA = `CRITÉRIOS EDITORIAIS (obrigatórios em todo roteiro):
+
+REGRAS ABSOLUTAS (red flags — NUNCA usar):
+- Proibido: compulsão, transtorno, TCA, bulimia, anorexia, "Xkg" (número + kg), antes/depois, calorias específicas
+- "você" apenas antes de ação neutra (nunca antes de estado/diagnóstico)
+- Nunca promete resultado físico/emagrecimento
+
+VOCABULÁRIO DA MARCA (use ao menos 2): raiz, padrão, "os 4", emoção sem destino
+
+ESTRUTURA DE 5 TRECHOS (cada trecho explícito e rotulado):
+1. HOOK — as 3 primeiras palavras NÃO podem servir para qualquer nutri (específico da tese)
+2. TENSÃO — desenvolve o conflito/dor real por trás do comportamento
+3. VIRADA — o ponto de virada; destaque a FRASE DO POST (quotável, isolável)
+4. ABSOLVIÇÃO — sempre fechar com variação de "não é falta de força de vontade, é padrão"
+5. FECHAMENTO/CTA — UM único CTA: envio | comentário | salvamento | bio_quiz`;
+
 const FORMAT_INSTRUCTIONS = {
-  reel_curto: `Gere um roteiro para Reel curto (até 30s) com:
-HOOK (0-7s): frase de impacto que para o scroll
-DESENVOLVIMENTO (7-25s): conteúdo principal direto e emocionante
-CTA (25-30s): chamada para ação clara
+  reel_curto: `Gere um roteiro para Reel curto (até 30s) seguindo a ESTRUTURA DE 5 TRECHOS:
+HOOK (0-5s) · TENSÃO (5-15s) · VIRADA (15-22s, marque FRASE DO POST) · ABSOLVIÇÃO (22-27s) · FECHAMENTO/CTA (27-30s)
 ---
 LEGENDA: legenda completa para o post (2-4 parágrafos + hashtags)`,
 
-  reel_medio: `Gere um roteiro para Reel médio (1min-1min30s) com:
-HOOK (0-7s): frase de impacto que para o scroll
-DESENVOLVIMENTO (7-75s): narrativa com desenvolvimento emocional e racional
-CTA (75-90s): chamada para ação clara
+  reel_medio: `Gere um roteiro para Reel médio (1min-1min30s) seguindo a ESTRUTURA DE 5 TRECHOS:
+HOOK (0-7s) · TENSÃO (7-50s) · VIRADA (50-70s, marque FRASE DO POST) · ABSOLVIÇÃO (70-82s) · FECHAMENTO/CTA (82-90s)
 ---
 LEGENDA: legenda completa para o post (3-5 parágrafos + hashtags)`,
 
-  reel_longo: `Gere um roteiro para Reel longo (até 64s) com:
-HOOK (0-7s): frase de impacto que para o scroll
-DESENVOLVIMENTO (7-57s): conteúdo aprofundado com exemplos e dados
-CTA (57-64s): chamada para ação clara
+  reel_longo: `Gere um roteiro para Reel longo (até 64s) seguindo a ESTRUTURA DE 5 TRECHOS:
+HOOK (0-7s) · TENSÃO (7-40s) · VIRADA (40-52s, marque FRASE DO POST) · ABSOLVIÇÃO (52-58s) · FECHAMENTO/CTA (58-64s)
 ---
 LEGENDA: legenda completa para o post (3-5 parágrafos + hashtags)`,
 
-  carrossel: `Gere um carrossel completo com:
+  carrossel: `Gere um carrossel completo mapeando a ESTRUTURA DE 5 TRECHOS nos slides:
 SLIDE 1 (HOOK): título impactante — fundo #3D4A35, fonte Cormorant Garamond, texto branco
-SLIDES 2-8 (DESENVOLVIMENTO): cada slide com: texto principal (2-4 linhas), especificação visual (cor de fundo: #3D4A35 ou #F8F4EE, fonte: Cormorant Garamond, tamanho sugerido)
-SLIDE FINAL (CTA): chamada para ação + palavra MANYCHAT se aplicável, fundo #B97040
+SLIDES 2-3 (TENSÃO): texto principal (2-4 linhas), fundo #3D4A35 ou #F8F4EE
+SLIDE VIRADA: a FRASE DO POST em destaque (slide de maior salvamento)
+SLIDE ABSOLVIÇÃO: "não é falta de força de vontade, é padrão"
+SLIDE FINAL (FECHAMENTO/CTA): um único CTA + MANYCHAT se aplicável, fundo #B97040
 ---
 LEGENDA: legenda completa para o post (3-5 parágrafos + hashtags)`,
 
-  carrossel_video: `Gere um carrossel com vídeo inicial:
-VÍDEO DE CAPA (até 15s): roteiro do vídeo de capa
-SLIDES 2-8 (DESENVOLVIMENTO): cada slide com: texto principal, especificação visual (cor de fundo: #3D4A35 ou #F8F4EE, fonte: Cormorant Garamond)
-SLIDE FINAL (CTA): chamada para ação, fundo #B97040
+  carrossel_video: `Gere um carrossel com vídeo inicial mapeando a ESTRUTURA DE 5 TRECHOS:
+VÍDEO DE CAPA (até 15s): HOOK + início da TENSÃO
+SLIDES (TENSÃO→VIRADA): texto principal, marque a FRASE DO POST no slide de virada, fundo #3D4A35 ou #F8F4EE
+SLIDE ABSOLVIÇÃO: "não é falta de força de vontade, é padrão"
+SLIDE FINAL (FECHAMENTO/CTA): um único CTA, fundo #B97040
 ---
 LEGENDA: legenda completa para o post (3-5 parágrafos + hashtags)`,
 };
@@ -95,7 +110,7 @@ const PILAR_CONTEXT = {
 };
 
 async function generateContent({ format, pilar, briefing, user_role, nutri_name }) {
-  const systemPrompt = voiceForUser(user_role, nutri_name);
+  const systemPrompt = `${voiceForUser(user_role, nutri_name)}\n\n${ROTEIRO_CRITERIA}`;
   const formatInstr = FORMAT_INSTRUCTIONS[format] || FORMAT_INSTRUCTIONS.reel_curto;
   const pilarCtx = PILAR_CONTEXT[pilar] || '';
 
@@ -228,7 +243,7 @@ async function generateAds({ objective, product, audience }) {
   const msg = await client.messages.create({
     model: MODEL,
     max_tokens: 2000,
-    system: VOICE_EVELYN,
+    system: `${VOICE_EVELYN}\n\n${ROTEIRO_CRITERIA}`,
     messages: [{
       role: 'user',
       content: `Crie 5 variações de copy para anúncio no Instagram/Facebook para teste A/B.
@@ -237,12 +252,15 @@ Objetivo: ${objective}
 Produto/Serviço: ${product}
 Público: ${audience}
 
+Cada variação segue a ESTRUTURA DE 5 TRECHOS dos critérios editoriais e respeita as red flags.
 Para cada variação, forneça:
 VARIAÇÃO X:
-HEADLINE: (até 40 caracteres)
-TEXTO PRINCIPAL: (até 125 caracteres idealmente)
-DESCRIÇÃO: (complemento opcional)
-ÂNGULO: (nome do ângulo criativo usado — ex: dor, curiosidade, prova social, urgência, identidade)
+HOOK: (3 primeiras palavras específicas da tese — até 40 caracteres, serve de headline)
+TENSÃO: (o conflito/dor real, na voz da seguidora)
+VIRADA + FRASE DO POST: (frase quotável e isolável — texto principal, até 125 caracteres idealmente)
+ABSOLVIÇÃO: (variação de "não é falta de força de vontade, é padrão")
+FECHAMENTO/CTA: (UM único CTA: envio | comentário | salvamento | bio_quiz)
+ÂNGULO: (nome do ângulo criativo — ex: dor, curiosidade, prova social, urgência, identidade)
 
 Use a voz acolhedora e comportamental da Evelyn. Nunca prometa resultados físicos. Foque em transformação emocional e comportamental.`,
     }],
