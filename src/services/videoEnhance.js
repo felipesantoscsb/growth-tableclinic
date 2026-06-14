@@ -109,6 +109,34 @@ function approxWordsFromSegments(segments) {
   return out;
 }
 
+// Marca fim de frase nas palavras. O whisper-1 às vezes NÃO põe pontuação nos
+// tokens de palavra (fica só no texto do segmento). Então combina 3 sinais:
+//  1) o próprio token termina em .!?…
+//  2) o segmento (que tem pontuação) termina em .!?… → marca a última palavra dele
+//  3) pausa longa entre palavras (gapEndS) → fronteira natural de fala
+// Grava w.sentenceEnd=true (sobrevive ao remap de corte).
+function markSentenceEnds(words, segments, { gapEndS = 0.6 } = {}) {
+  const ws = words || [];
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i];
+    if (/[.!?…]$/.test(w.text)) w.sentenceEnd = true;
+    const next = ws[i + 1];
+    if (next && (next.start - w.end) >= gapEndS) w.sentenceEnd = true; // pausa = fim de fala
+  }
+  // segmentos com pontuação final → marca a palavra cujo fim cai no fim do segmento
+  for (const s of (segments || [])) {
+    const t = String(s.text || '').trim();
+    if (!/[.!?…]$/.test(t)) continue;
+    const segEnd = +s.end;
+    if (!Number.isFinite(segEnd)) continue;
+    // última palavra com end <= segEnd + folga
+    let idx = -1;
+    for (let i = 0; i < ws.length; i++) { if (ws[i].end <= segEnd + 0.15) idx = i; else break; }
+    if (idx >= 0) ws[idx].sentenceEnd = true;
+  }
+  return ws;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // A.1 — Re-segmentação por ritmo de leitura
 // ════════════════════════════════════════════════════════════════════════════
@@ -145,7 +173,7 @@ function resegmentCaptions(words, cfg = {}) {
   let cur = [];
   for (const w of ws) {
     cur.push(w);
-    if (/[.!?…]$/.test(w.text)) { sentences.push(cur); cur = []; }
+    if (w.sentenceEnd || /[.!?…]$/.test(w.text)) { sentences.push(cur); cur = []; }
   }
   if (cur.length) sentences.push(cur);
 
@@ -593,7 +621,7 @@ function remapWordsThroughKeep(words, keep) {
     }
     if (newStart === null) continue; // palavra caiu num trecho cortado
     const dur = Math.max(0.05, w.end - w.start);
-    out.push({ text: w.text, start: +newStart.toFixed(3), end: +(newStart + dur).toFixed(3) });
+    out.push({ text: w.text, start: +newStart.toFixed(3), end: +(newStart + dur).toFixed(3), sentenceEnd: !!w.sentenceEnd });
   }
   return out;
 }
@@ -638,6 +666,7 @@ module.exports = {
   detectTimestampGranularity,
   cleanWordToken,
   flattenWords,
+  markSentenceEnds,
   approxWordsFromSegments,
   resegmentCaptions,
   wrapLines,

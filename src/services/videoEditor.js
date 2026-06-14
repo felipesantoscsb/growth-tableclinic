@@ -402,7 +402,8 @@ async function transcribeWords(videoPath, sessionDir) {
     file: fs.createReadStream(audioPath),
     model: process.env.WHISPER_MODEL || 'whisper-1',
     response_format: 'verbose_json',
-    timestamp_granularities: ['word'],
+    // 'segment' traz o texto COM pontuação → fronteiras de frase confiáveis
+    timestamp_granularities: ['word', 'segment'],
     language: 'pt',
   });
   try { fs.unlinkSync(audioPath); } catch {}
@@ -410,7 +411,10 @@ async function transcribeWords(videoPath, sessionDir) {
   const granularity = VE.detectTimestampGranularity(resp || {});
   let words = VE.flattenWords(resp || {});
   if (!words.length && Array.isArray(resp?.segments)) words = VE.approxWordsFromSegments(resp.segments);
-  console.log(`[Whisper] granularidade=${granularity} | ${words.length} palavras`);
+  // marca fim de frase combinando token + segmentos pontuados + pausas
+  words = VE.markSentenceEnds(words, resp?.segments || []);
+  const nSent = words.filter(w => w.sentenceEnd).length;
+  console.log(`[Whisper] granularidade=${granularity} | ${words.length} palavras | ${nSent} fim-de-frase`);
   return { words, granularity };
 }
 
