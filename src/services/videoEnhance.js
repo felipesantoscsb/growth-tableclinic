@@ -28,8 +28,8 @@ const DEFAULTS = {
   fontName: 'Liberation Sans',
   // Jump cut
   silenceDbfs: -35,            // limiar de energia
-  padBeforeS: 0.10,            // padding de segurança antes/depois da fala
-  padAfterS: 0.10,
+  padBeforeS: 0.06,            // padding de segurança antes/depois da fala
+  padAfterS: 0.06,
   crossfadeMs: 12,             // micro-crossfade de áudio nas emendas
   // níveis de agressividade → limiar de duração de silêncio p/ corte
   aggressiveness: 'medio',     // suave | medio | agressivo
@@ -39,7 +39,8 @@ const DEFAULTS = {
   visualSlowS: 2.5,
 };
 
-const AGGRESSION_GAP_S = { suave: 0.9, medio: 0.6, agressivo: 0.4 };
+// Limiar de duração de pausa p/ cortar, por nível. Apertado: pega pausinhas.
+const AGGRESSION_GAP_S = { suave: 0.55, medio: 0.35, agressivo: 0.25 };
 
 // Hesitações comuns em PT (palavra isolada e curta) — remoção opcional/agressiva
 const HESITATIONS = new Set(['é', 'éé', 'ééé', 'ã', 'ãã', 'ãn', 'hum', 'hmm', 'aham', 'ahn', 'eh', 'né', 'tipo', 'então']);
@@ -308,25 +309,34 @@ function assTime(s) {
   return `${h}:${p(m)}:${p(sec)}.${p(cs)}`;
 }
 
-// Gera string .ass. Se os blocos têm words com tempo (word_level), usa \k para
-// karaoke; senão escreve o bloco inteiro (sem destaque por palavra).
+// Gera string .ass com legenda ESTÁTICA AMARELA (sem karaoke).
+// Resolução do ASS = dimensões reais do vídeo (cfg.videoW/H) p/ não distorcer.
+// Default vertical 1080x1920 (formato Reels/Stories). Fonte e margens escalam
+// pela altura; vertical sobe a legenda (MarginV maior) p/ não colar no rodapé.
 function buildAss(blocks, cfg = {}) {
   const c = { ...DEFAULTS, ...cfg };
-  const primary = hexToAss(c.primaryColor);
-  const karaoke = hexToAss(c.karaokeColor);
-  const playResY = 720;
-  const fontSize = Math.round(playResY * 0.055); // ~5.5% da altura
+  const W = c.videoW || 1080;
+  const H = c.videoH || 1920;
+  const vertical = H >= W;
+
+  // Cor: amarela fixa (karaokeColor). Sem secondary/karaoke.
+  const yellow = hexToAss(c.karaokeColor);
+
+  const fontSize = Math.round(H * (vertical ? 0.042 : 0.055)); // ~4.2% vertical / 5.5% horizontal
+  const marginLR = Math.round(W * 0.08);
+  const marginV  = Math.round(H * (vertical ? 0.16 : 0.08));   // sobe no vertical (acima dos botões do Reels)
+  const outline  = Math.max(2, Math.round(fontSize * 0.10));
 
   const header = `[Script Info]
 ScriptType: v4.00+
-PlayResX: 1280
-PlayResY: ${playResY}
+PlayResX: ${W}
+PlayResY: ${H}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,${c.fontName},${fontSize},${primary},${karaoke},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,2,70,70,60,1
+Style: Default,${c.fontName},${fontSize},${yellow},${yellow},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${outline},0,2,${marginLR},${marginLR},${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text`;
@@ -334,18 +344,7 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text`;
   const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
 
   const lines = blocks.map(b => {
-    let body;
-    const hasWordTimes = Array.isArray(b.words) && b.words.length && b.words.every(w => Number.isFinite(w.start) && Number.isFinite(w.end));
-    if (hasWordTimes) {
-      // \kf<centésimos> por palavra → preenche a cor da palavra ativa
-      body = b.words.map((w, idx) => {
-        const durCs = Math.max(1, Math.round((w.end - w.start) * 100));
-        const sep = idx < b.words.length - 1 ? ' ' : '';
-        return `{\\kf${durCs}}${escape(w.text)}${sep}`;
-      }).join('');
-    } else {
-      body = escape((b.lines || [b.text]).join('\\N'));
-    }
+    const body = escape((b.lines || [b.text]).join('\\N'));
     return `Dialogue: 0,${assTime(b.start)},${assTime(b.end)},Default,,0,0,0,,${body}`;
   });
 

@@ -131,6 +131,17 @@ function getVideoDuration(inputPath) {
   });
 }
 
+// Dimensões do vídeo (W,H) — usado p/ formatar a legenda ASS conforme vertical/horizontal
+function getVideoDims(inputPath) {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(inputPath, (err, meta) => {
+      if (err || !meta) return resolve({ w: null, h: null });
+      const v = (meta.streams || []).find(s => s.codec_type === 'video');
+      resolve({ w: v?.width || null, h: v?.height || null });
+    });
+  });
+}
+
 function parseInstructions(instructions, duration) {
   const ops = {
     trim: null,
@@ -201,8 +212,12 @@ function parseInstructions(instructions, duration) {
 
 // Corte de pausas (Fase 1): só corta pausas LONGAS e deixa um respiro, em vez de
 // remover tudo pra zero (que gera jump cut e mata o ritmo da fala).
-const SILENCE_MIN_S = 1.2;  // só corta silêncio acima disso (preserva respiração/ênfase ≤1s)
+const SILENCE_MIN_S = 1.2;  // (legado) usado só pelo fallback buildSilenceRemoveFilter
 const KEEP_PAUSE_S = 0.4;   // ao cortar, mantém 400ms de pausa (não corta pra zero)
+// Detecção acústica: limiar BAIXO (0.25s) p/ surgir pausas curtas — quem decide
+// o que cortar é o detectJumpCuts (minGap por nível de agressividade). dBFS configurável.
+const SILENCE_DETECT_S = +(process.env.SILENCE_DETECT_S || 0.25);
+const SILENCE_DETECT_DB = +(process.env.SILENCE_DBFS || -32);
 
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
@@ -210,7 +225,7 @@ function detectSilenceSegments(inputPath) {
     const silences = [];
     let stderr = '';
     ffmpeg(inputPath)
-      .audioFilters(`silencedetect=noise=-35dB:d=${SILENCE_MIN_S}`)
+      .audioFilters(`silencedetect=noise=${SILENCE_DETECT_DB}dB:d=${SILENCE_DETECT_S}`)
       .outputOptions(['-f null'])
       .output('/dev/null')
       .on('stderr', line => {
@@ -693,7 +708,10 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
     let burned = false;
     if (words.length) {
       try {
-        const { assPath, report: capReport } = await buildOptimizedCaptions(words, sessionDir, cfg);
+        // dims do vídeo FINAL (pós-resize) → ASS formata p/ vertical/horizontal
+        const dims = await getVideoDims(mainOut);
+        const capCfg = { ...cfg, videoW: dims.w, videoH: dims.h };
+        const { assPath, report: capReport } = await buildOptimizedCaptions(words, sessionDir, capCfg);
         await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
         report.captions = { mode: 'ass_karaoke', ...capReport };
         burned = true;
