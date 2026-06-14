@@ -63,7 +63,7 @@ function detectTimestampGranularity(whisperOutput) {
 // Limpa um TOKEN de palavra do Whisper: tira pontuação/espaço solto no INÍCIO
 // (o whisper-1 às vezes devolve ",palavra" colado) mas preserva o final (",", ".").
 function cleanWordToken(raw) {
-  return String(raw ?? '').replace(/^[\s,;:."'¿¡«»\-–—]+/, '').trim();
+  return String(raw ?? '').replace(/^[\s\p{P}]+/u, '').trim();
 }
 
 // Normaliza qualquer shape do Whisper para uma lista plana de palavras {text,start,end}
@@ -152,8 +152,13 @@ function cps(text, durS) {
 // fronteiras sintáticas. Retorna [{words, start, end, text, lines}].
 // Limpa pontuação solta no INÍCIO do bloco (vírgula/ponto-e-vírgula órfãos que
 // sobram quando uma frase longa é subdividida) e espaços duplicados.
+// strip de QUALQUER pontuação/espaço unicode no início (cobre vírgula ASCII e
+// variantes: ， ‚ 、 etc.) — \p{P} = toda pontuação Unicode.
+function stripLeadingPunct(t) {
+  return String(t || '').replace(/^[\s\p{P}]+/u, '');
+}
 function cleanBlockText(t) {
-  return String(t || '').replace(/^[\s,;:.!?…»)\]-]+/, '').replace(/\s+/g, ' ').trim();
+  return stripLeadingPunct(String(t || '')).replace(/\s+/g, ' ').trim();
 }
 
 // SENTENÇA-PRIMEIRO: nenhum bloco cruza fronteira de frase. Agrupa palavras em
@@ -388,7 +393,9 @@ Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text`;
   const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
 
   const lines = blocks.map(b => {
-    const body = escape((b.lines || [b.text]).join('\\N'));
+    // guarda final: nenhuma linha começa com pontuação
+    const ls = (b.lines || [b.text]).map(l => stripLeadingPunct(l));
+    const body = escape(ls.join('\\N'));
     return `Dialogue: 0,${assTime(b.start)},${assTime(b.end)},Default,,0,0,0,,${body}`;
   });
 
@@ -646,8 +653,10 @@ function srtTime(s) {
   return `${p(h)}:${p(m)}:${p(sec)},${p(ms, 3)}`;
 }
 function buildSrtFromBlocks(blocks) {
-  const out = (blocks || []).map((b, i) =>
-    `${i + 1}\n${srtTime(b.start)} --> ${srtTime(b.end)}\n${(b.lines || [b.text]).join('\n')}`);
+  const out = (blocks || []).map((b, i) => {
+    const ls = (b.lines || [b.text]).map(l => stripLeadingPunct(l));
+    return `${i + 1}\n${srtTime(b.start)} --> ${srtTime(b.end)}\n${ls.join('\n')}`;
+  });
   return out.length ? out.join('\n\n') + '\n' : '';
 }
 
