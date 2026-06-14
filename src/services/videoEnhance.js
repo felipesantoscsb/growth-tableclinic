@@ -390,7 +390,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,${c.fontName},${fontSize},${yellow},${yellow},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${outline},0,2,${marginLR},${marginLR},${marginV},1
 
 [Events]
-Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text`;
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 
   const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
 
