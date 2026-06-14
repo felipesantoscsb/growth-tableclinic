@@ -706,36 +706,49 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
     words = words.map(w => ({ ...w, start: w.start / ops.speed, end: w.end / ops.speed }));
   }
 
-  // ── Passo 3: legendas otimizadas (ASS karaoke) com fallback p/ SRT ─────────
+  // ── Passo 3: legendas otimizadas ──────────────────────────────────────────
+  // Gera os blocos UMA vez (resegment+revisão+validação). Tenta queimar ASS;
+  // se o ASS falhar, queima SRT DOS MESMOS BLOCOS (texto idêntico, limpo) — NÃO
+  // cai mais no SRT velho/transcrição crua. Só usa transcrição crua se não
+  // houver palavras (transcrição original falhou).
   if (ops.subtitles) {
     let burned = false;
     if (words.length) {
+      const dims = await getVideoDims(mainOut);
+      const vertical = dims.h && dims.w && dims.h >= dims.w;
+      const capCfg = {
+        ...cfg, videoW: dims.w, videoH: dims.h,
+        maxCharsPerLine: vertical ? 24 : 42,
+        maxWords: vertical ? 5 : 7,
+        maxLines: 2,
+      };
       try {
-        // dims do vídeo FINAL (pós-resize) → ASS formata p/ vertical/horizontal
-        const dims = await getVideoDims(mainOut);
-        const vertical = dims.h && dims.w && dims.h >= dims.w;
-        // Vertical (Reels): linhas curtas e poucas palavras p/ não estourar a tela.
-        const capCfg = {
-          ...cfg, videoW: dims.w, videoH: dims.h,
-          maxCharsPerLine: vertical ? 24 : 42,
-          maxWords: vertical ? 5 : 7,
-          maxLines: 2,
-        };
-        const { assPath, report: capReport } = await buildOptimizedCaptions(words, sessionDir, capCfg);
-        await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
-        report.captions = { mode: 'ass_karaoke', ...capReport };
-        burned = true;
+        const { assPath, blocks, report: capReport } = await buildOptimizedCaptions(words, sessionDir, capCfg);
+        // 3a) tenta ASS (karaoke estático amarelo, vertical-aware)
+        try {
+          await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
+          report.captions = { mode: 'ass', ...capReport };
+          burned = true;
+        } catch (eAss) {
+          // 3b) fallback: SRT dos MESMOS blocos otimizados (texto limpo igual)
+          report.fallbacks.push(`burn ASS falhou (${eAss.message}); SRT dos blocos otimizados`);
+          const srtPath = path.join(sessionDir, 'subs_opt.srt');
+          fs.writeFileSync(srtPath, VE.buildSrtFromBlocks(blocks));
+          await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
+          report.captions = { mode: 'srt_otimizado', ...capReport, ass_error: eAss.message };
+          burned = true;
+        }
       } catch (e) {
-        report.fallbacks.push(`legenda ASS falhou (${e.message}); tentando SRT`);
+        report.fallbacks.push(`pipeline de legenda falhou: ${e.message}`);
       }
     }
     if (!burned) {
-      // Fallback: re-transcreve o vídeo final e queima SRT (comportamento antigo)
+      // Último recurso: transcrição crua do vídeo final (só se não houve palavras)
       try {
-        console.log('[FFmpeg] Fallback SRT — transcrevendo vídeo final...');
+        console.log('[FFmpeg] Último recurso — transcrição crua...');
         const srtPath = await transcribeToSrt(mainOut, sessionDir);
         await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
-        report.captions = { mode: 'srt_fallback' };
+        report.captions = { mode: 'srt_cru' };
         burned = true;
       } catch (e) {
         console.error('[FFmpeg] Falha ao gerar legendas:', e.message);

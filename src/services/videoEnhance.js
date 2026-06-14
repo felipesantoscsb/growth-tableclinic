@@ -602,6 +602,21 @@ function removedBeforeKeep(keep, target) {
   return removed;
 }
 
+// SRT a partir dos blocos JÁ otimizados (mesma limpeza/encaixe do ASS).
+// Usado como fallback quando o burn de ASS falha — mantém texto limpo.
+function srtTime(s) {
+  s = Math.max(0, s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  const ms = Math.round((s - Math.floor(s)) * 1000);
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return `${p(h)}:${p(m)}:${p(sec)},${p(ms, 3)}`;
+}
+function buildSrtFromBlocks(blocks) {
+  const out = (blocks || []).map((b, i) =>
+    `${i + 1}\n${srtTime(b.start)} --> ${srtTime(b.end)}\n${(b.lines || [b.text]).join('\n')}`);
+  return out.length ? out.join('\n\n') + '\n' : '';
+}
+
 // ── EDL (lista de edição não-destrutiva) ─────────────────────────────────────
 function writeEdl(sessionDir, edl) {
   try {
@@ -631,5 +646,6 @@ module.exports = {
   buildZoomFilter,
   buildRetentionZoom,
   remapWordsThroughKeep,
+  buildSrtFromBlocks,
   writeEdl,
 };
