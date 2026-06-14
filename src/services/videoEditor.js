@@ -710,7 +710,14 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
       try {
         // dims do vídeo FINAL (pós-resize) → ASS formata p/ vertical/horizontal
         const dims = await getVideoDims(mainOut);
-        const capCfg = { ...cfg, videoW: dims.w, videoH: dims.h };
+        const vertical = dims.h && dims.w && dims.h >= dims.w;
+        // Vertical (Reels): linhas curtas e poucas palavras p/ não estourar a tela.
+        const capCfg = {
+          ...cfg, videoW: dims.w, videoH: dims.h,
+          maxCharsPerLine: vertical ? 24 : 42,
+          maxWords: vertical ? 5 : 7,
+          maxLines: 2,
+        };
         const { assPath, report: capReport } = await buildOptimizedCaptions(words, sessionDir, capCfg);
         await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
         report.captions = { mode: 'ass_karaoke', ...capReport };

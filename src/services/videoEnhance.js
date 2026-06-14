@@ -21,8 +21,9 @@ const DEFAULTS = {
   cpsIdealHigh: 15,
   maxCharsPerLine: 42,
   maxLines: 2,
+  maxWords: 6,                 // teto de palavras por bloco (legenda punchy)
   blockMinS: 1.0,
-  blockMaxS: 6.0,
+  blockMaxS: 5.0,
   karaokeColor: '#FFD700',     // amarelo da palavra ativa
   primaryColor: '#FFFFFF',     // texto base
   fontName: 'Liberation Sans',
@@ -137,11 +138,13 @@ function resegmentCaptions(words, cfg = {}) {
     const charCount = text.length;
     const wouldExceedCps = cps(text, Math.max(dur, 0.01)) > c.cpsIdealHigh;
     const tooLong = charCount > c.maxCharsPerLine * c.maxLines;
+    const tooManyWords = cur.length >= c.maxWords;   // teto de palavras (encaixe punchy)
     const tooSlowDur = dur >= c.blockMaxS;
 
+    // Fim de sentença SEMPRE fecha o bloco (encaixe: a fala termina junto com a legenda)
     if (endsSentence) { flush(); continue; }
 
-    if (tooLong || tooSlowDur || (charCount > c.maxCharsPerLine && wouldExceedCps)) {
+    if (tooManyWords || tooLong || tooSlowDur || (charCount > c.maxCharsPerLine && wouldExceedCps)) {
       // procura ponto de quebra sintático melhor dentro da janela atual
       let breakIdx = -1;
       // 1) após pontuação fraca
@@ -322,10 +325,10 @@ function buildAss(blocks, cfg = {}) {
   // Cor: amarela fixa (karaokeColor). Sem secondary/karaoke.
   const yellow = hexToAss(c.karaokeColor);
 
-  const fontSize = Math.round(H * (vertical ? 0.042 : 0.055)); // ~4.2% vertical / 5.5% horizontal
-  const marginLR = Math.round(W * 0.08);
-  const marginV  = Math.round(H * (vertical ? 0.16 : 0.08));   // sobe no vertical (acima dos botões do Reels)
-  const outline  = Math.max(2, Math.round(fontSize * 0.10));
+  const fontSize = Math.round(H * (vertical ? 0.034 : 0.05));  // menor p/ não estourar a tela
+  const marginLR = Math.round(W * 0.10);                       // bloco central estreito (centralizado)
+  const marginV  = Math.round(H * (vertical ? 0.18 : 0.08));   // sobe no vertical (acima dos botões do Reels)
+  const outline  = Math.max(2, Math.round(fontSize * 0.12));
 
   const header = `[Script Info]
 ScriptType: v4.00+
