@@ -35,17 +35,24 @@ function cleanJobs() {
   for (const [id, j] of jobs) if (j.createdAt < cutoff) jobs.delete(id);
 }
 
+// Limite de edições simultâneas por worker (ffmpeg satura CPU). Configurável.
+const MAX_CONCURRENT = +(process.env.VIDEO_MAX_CONCURRENT || 2);
+let activeJobs = 0;
+
 // POST /api/edit/video — inicia a edição em background e devolve um job_id na hora
 router.post('/video', (req, res) => {
-  const { video_url, instructions, card_id } = req.body;
+  const { video_url, instructions, card_id, config } = req.body;
   if (!video_url) return fail(res, 'video_url obrigatório', 400);
+  if (activeJobs >= MAX_CONCURRENT)
+    return fail(res, 'Servidor processando outros vídeos no momento — tente em instantes', 429);
   cleanJobs();
 
   const jobId = randomUUID();
   jobs.set(jobId, { status: 'processing', createdAt: Date.now() });
+  activeJobs++;
 
   // instructions é opcional: sem ela, roda o padrão (corte natural + legendas)
-  editVideo({ video_url, instructions: instructions || '', cardId: card_id || req.user.id })
+  editVideo({ video_url, instructions: instructions || '', cardId: card_id || req.user.id, config: config || {} })
     .then(result => {
       jobs.set(jobId, {
         status: 'done', createdAt: Date.now(),
@@ -54,6 +61,7 @@ router.post('/video', (req, res) => {
           duration_output: result.duration_output,
           size_mb: result.size_mb,
           ops_applied: result.ops_applied,
+          enhance_report: result.enhance_report,
           download_url: `/api/edit/download/${path.basename(result.sessionDir)}`,
         },
       });
@@ -61,7 +69,8 @@ router.post('/video', (req, res) => {
     .catch(e => {
       console.error('[edit/video]', e.message);
       jobs.set(jobId, { status: 'error', createdAt: Date.now(), error: e.message });
-    });
+    })
+    .finally(() => { activeJobs = Math.max(0, activeJobs - 1); });
 
   ok(res, { job_id: jobId, status: 'processing' });
 });

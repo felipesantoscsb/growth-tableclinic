@@ -5,6 +5,11 @@ const dns = require('dns').promises;
 const https = require('https');
 const http = require('http');
 const { isDriveUrl, downloadFromDrive } = require('./driveDownloader');
+const VE = require('./videoEnhance');
+
+// Diretório de fontes embarcadas (Dockerfile instala fonts-liberation).
+// Sobrescrevível por FONTS_DIR. Garante que o libass ache "Liberation Sans".
+const FONTS_DIR = process.env.FONTS_DIR || '/usr/share/fonts/truetype/liberation';
 
 // fix: prefere binários do sistema (o Dockerfile instala ffmpeg/ffprobe com libass,
 // necessário para os filtros `subtitles` e `silencedetect`). Cai para o pacote npm
@@ -361,30 +366,20 @@ function buildCaptionSrt(words) {
   return blocks.length ? blocks.join('\n\n') + '\n' : '';
 }
 
-async function transcribeToSrt(videoPath, sessionDir) {
+// Transcreve e devolve as PALAVRAS cruas do Whisper (word-level) + granularidade.
+// Reutilizável tanto para legendas quanto para detecção de jump cut.
+async function transcribeWords(videoPath, sessionDir) {
   const openai = getOpenAI();
-  if (!openai) throw new Error('Legendas exigem OPENAI_API_KEY configurada no ambiente');
-
-  // Sem áudio não há o que transcrever — erro claro em vez do críptico do ffmpeg
+  if (!openai) throw new Error('Transcrição exige OPENAI_API_KEY configurada no ambiente');
   if (!(await hasAudioStream(videoPath)))
     throw new Error('o vídeo não tem faixa de áudio para transcrever');
 
-  // Extrai só o áudio (mp3 leve) para acelerar o upload
-  const audioPath = path.join(sessionDir, 'audio.mp3');
+  const audioPath = path.join(sessionDir, `audio_${Date.now()}.mp3`);
   await new Promise((resolve, reject) => {
-    ffmpeg(videoPath)
-      .noVideo()
-      .audioCodec('libmp3lame')
-      .audioBitrate('128k')
-      .output(audioPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+    ffmpeg(videoPath).noVideo().audioCodec('libmp3lame').audioBitrate('128k')
+      .output(audioPath).on('end', resolve).on('error', reject).run();
   });
 
-  // Timestamp por palavra (verbose_json) → permite legendas inteligentes
-  // (≤7 palavras, quebra por sentido, sincronizadas). Transcrição roda no
-  // arquivo JÁ editado, então os tempos já estão no timeline final.
   const resp = await openai.audio.transcriptions.create({
     file: fs.createReadStream(audioPath),
     model: process.env.WHISPER_MODEL || 'whisper-1',
@@ -392,8 +387,18 @@ async function transcribeToSrt(videoPath, sessionDir) {
     timestamp_granularities: ['word'],
     language: 'pt',
   });
+  try { fs.unlinkSync(audioPath); } catch {}
 
-  const srt = buildCaptionSrt(resp && Array.isArray(resp.words) ? resp.words : []);
+  const granularity = VE.detectTimestampGranularity(resp || {});
+  let words = VE.flattenWords(resp || {});
+  if (!words.length && Array.isArray(resp?.segments)) words = VE.approxWordsFromSegments(resp.segments);
+  console.log(`[Whisper] granularidade=${granularity} | ${words.length} palavras`);
+  return { words, granularity };
+}
+
+async function transcribeToSrt(videoPath, sessionDir) {
+  const { words } = await transcribeWords(videoPath, sessionDir);
+  const srt = buildCaptionSrt(words);
 
   // Filtra alucinações do Whisper (Amara.org etc.). Se não sobrar legenda real,
   // é áudio sem fala — falha de propósito para entregar o vídeo sem legenda.
@@ -496,6 +501,63 @@ function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) 
   });
 }
 
+// Queima legenda .ASS (karaoke por palavra). Copia o .ass para path ASCII-only
+// (acento/caractere especial quebra o filtro subtitles silenciosamente) e passa
+// fontsdir p/ o libass achar a fonte embarcada.
+function burnAss(inputPath, assPath, outPath, { muteAudio = false } = {}) {
+  return new Promise((resolve, reject) => {
+    // path temporário ASCII-only no mesmo dir
+    const safeName = `subs_${Date.now()}.ass`;
+    const safePath = path.join(path.dirname(assPath), safeName);
+    try { fs.copyFileSync(assPath, safePath); } catch (e) { return reject(e); }
+
+    const escaped = safePath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    const fontsArg = fs.existsSync(FONTS_DIR) ? `:fontsdir='${FONTS_DIR}'` : '';
+    const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
+    ffmpeg(inputPath)
+      .videoFilters(`subtitles='${escaped}'${fontsArg}`)
+      .outputOptions(['-c:v libx264', '-preset fast', '-crf 20', ...audioOpts, '-movflags +faststart', '-pix_fmt yuv420p'])
+      .output(outPath)
+      .on('start', () => console.log('[FFmpeg] Queimando legendas ASS (karaoke)...'))
+      .on('end', () => { try { fs.unlinkSync(safePath); } catch {} resolve(); })
+      .on('error', err => { try { fs.unlinkSync(safePath); } catch {} reject(err); })
+      .run();
+  });
+}
+
+// Pipeline de legenda otimizada: resegmenta → revisa PT (LLM) → valida/auto-fix
+// → gera ASS karaoke. Cada camada degrada com elegância. Retorna { assPath, report }.
+async function buildOptimizedCaptions(words, sessionDir, cfg = {}) {
+  const report = { layers: {} };
+
+  // A.1 re-segmentação
+  let blocks = VE.resegmentCaptions(words, cfg);
+  report.layers.resegment = { blocks: blocks.length };
+  if (!blocks.length) throw new Error('re-segmentação não produziu blocos');
+
+  // A.2 revisão PT (best-effort)
+  try {
+    const rev = await VE.reviewCaptionsPT(blocks, { glossario: cfg.glossario || [] });
+    blocks = rev.blocks;
+    report.layers.review = { reviewed: rev.reviewed, reason: rev.reason || null };
+  } catch (e) { report.layers.review = { reviewed: false, reason: e.message }; }
+
+  // A.3 validação + auto-fix
+  let val = VE.validateCaptions(blocks, cfg);
+  if (!val.ok) {
+    blocks = VE.autoFixCaptions(blocks, cfg);
+    val = VE.validateCaptions(blocks, cfg);
+  }
+  report.layers.validate = { ok: val.ok, issues: val.issues.length };
+
+  // A.4 ASS karaoke
+  const ass = VE.buildAss(blocks, cfg);
+  const assPath = path.join(sessionDir, 'subs.ass');
+  fs.writeFileSync(assPath, ass);
+  report.captionStarts = blocks.map(b => b.start);
+  return { assPath, report, blocks };
+}
+
 // Remove a faixa de áudio sem reencodar o vídeo (rápido)
 function stripAudio(inputPath, outPath) {
   return new Promise((resolve, reject) => {
@@ -508,7 +570,27 @@ function stripAudio(inputPath, outPath) {
   });
 }
 
-async function editVideo({ video_url, instructions, cardId }) {
+// Roda um complexFilter genérico com maps dinâmicos (corte frame-accurate →
+// recodifica; crf 20 p/ qualidade alta em 1-2min). Usado pelo jump cut dual-signal.
+function runComplexConcat(inputPath, filter, maps, outPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .complexFilter(filter)
+      .outputOptions([
+        `-map ${maps[0]}`, `-map ${maps[1]}`,
+        '-c:v libx264', '-preset fast', '-crf 20',
+        '-c:a aac', '-b:a 160k',
+        '-movflags +faststart', '-pix_fmt yuv420p',
+      ])
+      .output(outPath)
+      .on('start', () => console.log('[FFmpeg] Jump cut (concat + crossfade)...'))
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+async function editVideo({ video_url, instructions, cardId, config = {} }) {
   const sessionId = `video_${cardId || 'tmp'}_${Date.now()}`;
   const sessionDir = path.join(TMP_DIR, sessionId);
   fs.mkdirSync(sessionDir);
@@ -516,72 +598,150 @@ async function editVideo({ video_url, instructions, cardId }) {
   const ext = video_url.match(/\.(mp4|mov|webm|avi|mkv)/i)?.[1] || 'mp4';
   const inputPath = path.join(sessionDir, `input.${ext}`);
 
-  // Integração Google Drive: roteia pelo downloader autenticado
-  if (isDriveUrl(video_url)) {
-    await downloadFromDrive(video_url, inputPath);
-  } else {
-    await downloadFile(video_url, inputPath);
-  }
+  if (isDriveUrl(video_url)) await downloadFromDrive(video_url, inputPath);
+  else await downloadFile(video_url, inputPath);
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  // Sem instruções → roda o padrão: corte natural + legendas inteligentes.
-  // Com instruções, segue o pedido. (Sem fala/áudio, a legenda é pulada com aviso.)
   const ops = (instructions && instructions.trim())
     ? parseInstructions(instructions, duration)
     : { trim: null, resize: null, subtitles: true, removeSilence: true, speed: null, volume: null, mute: false, grayscale: false };
   const outputPath = path.join(sessionDir, 'output.mp4');
 
-  // Passo 1 (opcional): remoção de silêncios → intermediário
+  // Config das camadas (env defaults sobrescrevíveis por chamada). Nível de
+  // agressividade do jump cut vem da instrução, se presente.
+  const text = (instructions || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+  let aggressiveness = process.env.JUMPCUT_AGGRESSIVENESS || 'medio';
+  if (/agressiv/.test(text)) aggressiveness = 'agressivo';
+  else if (/suave|leve/.test(text)) aggressiveness = 'suave';
+  const cfg = {
+    aggressiveness,
+    cpsMax: +(process.env.CAPTION_CPS_MAX || VE.DEFAULTS.cpsMax),
+    karaokeColor: process.env.CAPTION_KARAOKE_COLOR || VE.DEFAULTS.karaokeColor,
+    silenceDbfs: +(process.env.SILENCE_DBFS || VE.DEFAULTS.silenceDbfs),
+    ...config,
+  };
+
+  const report = { whisper: null, jumpcut: null, captions: null, visualRhythm: null, fallbacks: [] };
+
+  // ── Transcrição única do ORIGINAL (serve jump cut + legendas) ──────────────
+  // best-effort: se falhar, segue sem words (camadas degradam).
+  let words = [];
+  if ((ops.subtitles || ops.removeSilence) && !ops.mute) {
+    try {
+      const tr = await transcribeWords(inputPath, sessionDir);
+      words = tr.words;
+      report.whisper = { granularity: tr.granularity, words: words.length };
+    } catch (e) {
+      report.whisper = { error: e.message };
+      report.fallbacks.push(`transcrição original falhou: ${e.message}`);
+    }
+  }
+
+  // ── Passo 1: Jump cut (dual signal) ────────────────────────────────────────
   let workingInput = inputPath;
+  let keepSegments = null;
   if (ops.removeSilence) {
-    console.log('[FFmpeg] Detectando silêncios...');
-    const silences = await detectSilenceSegments(inputPath);
-    const silenceFilter = silences.length ? buildSilenceRemoveFilter(silences, duration) : null;
-    if (silenceFilter) {
-      console.log(`[FFmpeg] ${silences.length} silêncio(s), ${silenceFilter.speechSegments.length} segmento(s) de fala`);
-      const noSilencePath = path.join(sessionDir, 'nosilence.mp4');
-      await runSilenceRemoval(inputPath, silenceFilter, noSilencePath);
-      workingInput = noSilencePath;
-      duration = await getVideoDuration(noSilencePath);
-    } else {
-      console.log('[FFmpeg] Nenhum silêncio relevante detectado');
+    try {
+      console.log('[FFmpeg] Detectando silêncios (silencedetect)...');
+      const silences = await detectSilenceSegments(inputPath); // [{start,end}]
+      const jc = VE.detectJumpCuts(duration, silences, words, cfg);
+      report.jumpcut = jc.stats;
+
+      if (jc.cuts.length && jc.keep.length) {
+        const kf = VE.buildKeepFilter(jc.keep, cfg);
+        const cutPath = path.join(sessionDir, 'nosilence.mp4');
+        try {
+          await runComplexConcat(inputPath, kf.filter, kf.maps, cutPath);
+        } catch (e) {
+          // fallback: caminho antigo (encurta pausas, sem crossfade)
+          report.fallbacks.push(`jump cut dual-signal falhou (${e.message}); usando encurtamento simples`);
+          const sf = buildSilenceRemoveFilter(silences, duration);
+          if (sf) await runSilenceRemoval(inputPath, sf, cutPath);
+          else throw e;
+        }
+        workingInput = cutPath;
+        keepSegments = jc.keep;
+        duration = await getVideoDuration(cutPath);
+        // EDL não-destrutivo
+        VE.writeEdl(sessionDir, { source: 'input.' + ext, cuts: jc.cuts, keep: jc.keep, stats: jc.stats });
+        // re-mapeia palavras p/ timeline pós-corte
+        if (words.length) words = VE.remapWordsThroughKeep(words, jc.keep);
+      } else {
+        console.log('[FFmpeg] Nenhum corte relevante');
+        ops.removeSilence = false;
+      }
+    } catch (e) {
+      report.fallbacks.push(`jump cut falhou: ${e.message}`);
       ops.removeSilence = false;
     }
   }
 
-  // Passo 2: filtros principais (se legendas, vai para arquivo intermediário)
+  // ── Passo 2: filtros principais (resize/speed/grayscale/volume) ────────────
   const mainOut = ops.subtitles ? path.join(sessionDir, 'stage_main.mp4') : outputPath;
-
-  // Legendas (Whisper) precisam do áudio para transcrever. Se o usuário pediu
-  // mudo + legendas, adiamos a remoção do áudio para depois da transcrição —
-  // senão o passo principal removeria o áudio e a transcrição falharia
-  // ("Output file does not contain any stream"). O mute é aplicado ao queimar
-  // as legendas (ou no fallback abaixo).
   const deferMute = ops.mute && ops.subtitles;
   const mainOps = deferMute ? { ...ops, mute: false } : ops;
   await runMainPass(workingInput, mainOps, duration, mainOut);
 
-  // Passo 3 (opcional, best-effort): legendas via Whisper
+  // velocidade altera o tempo: escala as palavras p/ casar com o vídeo acelerado
+  if (ops.speed && ops.speed !== 1.0 && words.length) {
+    words = words.map(w => ({ ...w, start: w.start / ops.speed, end: w.end / ops.speed }));
+  }
+
+  // ── Passo 3: legendas otimizadas (ASS karaoke) com fallback p/ SRT ─────────
   if (ops.subtitles) {
-    try {
-      console.log('[FFmpeg] Transcrevendo áudio para legendas...');
-      const srtPath = await transcribeToSrt(mainOut, sessionDir);
-      await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
-    } catch (e) {
-      console.error('[FFmpeg] Falha ao gerar legendas:', e.message);
-      // Não derruba a edição inteira — entrega o vídeo sem legenda e avisa.
-      // Se o mute foi adiado, mainOut ainda tem áudio: removemos agora para
-      // respeitar o pedido de mudo do usuário.
-      if (deferMute) await stripAudio(mainOut, outputPath);
-      else fs.copyFileSync(mainOut, outputPath);
-      ops.subtitles = false;
-      ops.subtitles_warning = e.message;
+    let burned = false;
+    if (words.length) {
+      try {
+        const { assPath, report: capReport } = await buildOptimizedCaptions(words, sessionDir, cfg);
+        await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
+        report.captions = { mode: 'ass_karaoke', ...capReport };
+        burned = true;
+      } catch (e) {
+        report.fallbacks.push(`legenda ASS falhou (${e.message}); tentando SRT`);
+      }
+    }
+    if (!burned) {
+      // Fallback: re-transcreve o vídeo final e queima SRT (comportamento antigo)
+      try {
+        console.log('[FFmpeg] Fallback SRT — transcrevendo vídeo final...');
+        const srtPath = await transcribeToSrt(mainOut, sessionDir);
+        await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
+        report.captions = { mode: 'srt_fallback' };
+        burned = true;
+      } catch (e) {
+        console.error('[FFmpeg] Falha ao gerar legendas:', e.message);
+        if (deferMute) await stripAudio(mainOut, outputPath);
+        else fs.copyFileSync(mainOut, outputPath);
+        ops.subtitles = false;
+        ops.subtitles_warning = e.message;
+        report.captions = { mode: 'none', error: e.message };
+      }
     }
   }
 
+  // ── Ritmo visual (análise; zoom = sugestão, não auto-aplicado) ─────────────
+  try {
+    const finalDur = await getVideoDuration(outputPath);
+    const events = [];
+    if (report.captions?.captionStarts) events.push(...report.captions.captionStarts);
+    const vr = VE.analyzeVisualRhythm(finalDur, events, cfg);
+    report.visualRhythm = vr;
+  } catch (e) { report.fallbacks.push(`ritmo visual: ${e.message}`); }
+
   const finalDuration = await getVideoDuration(outputPath);
   const stat = fs.statSync(outputPath);
+
+  // Limpeza de intermediários (mantém output.mp4 + edl.json). Best-effort.
+  try {
+    for (const f of fs.readdirSync(sessionDir)) {
+      if (f === 'output.mp4' || f === 'edl.json') continue;
+      if (/^(input\.|audio_|audio\.|nosilence|stage_main|subs\.|subs_)/.test(f)) {
+        try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
+      }
+    }
+  } catch {}
+
   return {
     outputPath,
     sessionDir,
@@ -589,6 +749,7 @@ async function editVideo({ video_url, instructions, cardId }) {
     duration_output: Math.round(finalDuration),
     size_mb: (stat.size / 1_048_576).toFixed(2),
     ops_applied: ops,
+    enhance_report: report,
   };
 }
 

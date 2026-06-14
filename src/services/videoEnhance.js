@@ -1,0 +1,601 @@
+/**
+ * videoEnhance.js — camadas de otimização do módulo de edição de vídeo.
+ *
+ * Mantém videoEditor.js estável; cada função aqui é tolerante a falha e
+ * pensada para DEGRADAR com elegância (o chamador mantém o resultado anterior
+ * se uma camada lançar). Tudo configurável via objeto `cfg`.
+ *
+ * Whisper: o projeto usa OpenAI whisper-1 com timestamp_granularities:['word']
+ * → output WORD_LEVEL (resp.words = [{word,start,end}]). Sem necessidade de
+ * upgrade/WhisperX (que exigiria runtime Python). Quando word-level não estiver
+ * disponível, as camadas caem para aproximação por segmento (documentado).
+ */
+const fs = require('fs');
+const path = require('path');
+
+// ── Config padrão (tudo sobrescrevível por chamada) ─────────────────────────
+const DEFAULTS = {
+  // Legendas
+  cpsMax: 17,
+  cpsIdealLow: 12,
+  cpsIdealHigh: 15,
+  maxCharsPerLine: 42,
+  maxLines: 2,
+  blockMinS: 1.0,
+  blockMaxS: 6.0,
+  karaokeColor: '#FFD700',     // amarelo da palavra ativa
+  primaryColor: '#FFFFFF',     // texto base
+  fontName: 'Liberation Sans',
+  // Jump cut
+  silenceDbfs: -35,            // limiar de energia
+  padBeforeS: 0.10,            // padding de segurança antes/depois da fala
+  padAfterS: 0.10,
+  crossfadeMs: 12,             // micro-crossfade de áudio nas emendas
+  // níveis de agressividade → limiar de duração de silêncio p/ corte
+  aggressiveness: 'medio',     // suave | medio | agressivo
+  // Ritmo visual
+  visualIdealLowS: 1.2,
+  visualIdealHighS: 2.0,
+  visualSlowS: 2.5,
+};
+
+const AGGRESSION_GAP_S = { suave: 0.9, medio: 0.6, agressivo: 0.4 };
+
+// Hesitações comuns em PT (palavra isolada e curta) — remoção opcional/agressiva
+const HESITATIONS = new Set(['é', 'éé', 'ééé', 'ã', 'ãã', 'ãn', 'hum', 'hmm', 'aham', 'ahn', 'eh', 'né', 'tipo', 'então']);
+
+// ════════════════════════════════════════════════════════════════════════════
+// A.0 — Detecção de granularidade
+// ════════════════════════════════════════════════════════════════════════════
+function detectTimestampGranularity(whisperOutput) {
+  const o = whisperOutput || {};
+  if (Array.isArray(o.words) && o.words.length && o.words.every(w => Number.isFinite(w.start) && Number.isFinite(w.end))) {
+    return 'word_level';
+  }
+  if (Array.isArray(o.segments) && o.segments.some(s => Array.isArray(s.words) && s.words.length)) {
+    return 'word_level';
+  }
+  return 'segment_only';
+}
+
+// Normaliza qualquer shape do Whisper para uma lista plana de palavras {text,start,end}
+function flattenWords(whisperOutput) {
+  const o = whisperOutput || {};
+  if (Array.isArray(o.words) && o.words.length) {
+    return o.words
+      .map(w => ({ text: String(w.word ?? w.text ?? '').trim(), start: +w.start, end: +w.end }))
+      .filter(w => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
+  }
+  if (Array.isArray(o.segments)) {
+    const out = [];
+    for (const s of o.segments) {
+      if (Array.isArray(s.words) && s.words.length) {
+        for (const w of s.words) {
+          const t = String(w.word ?? w.text ?? '').trim();
+          if (t && Number.isFinite(+w.start) && Number.isFinite(+w.end)) out.push({ text: t, start: +w.start, end: +w.end });
+        }
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+// Aproxima palavras a partir de segmentos (segment_only): distribui o tempo do
+// segmento proporcionalmente ao nº de caracteres de cada palavra. APROXIMAÇÃO.
+function approxWordsFromSegments(segments) {
+  const out = [];
+  for (const s of (segments || [])) {
+    const text = String(s.text || '').trim();
+    if (!text || !Number.isFinite(+s.start) || !Number.isFinite(+s.end)) continue;
+    const toks = text.split(/\s+/);
+    const totalChars = toks.reduce((a, t) => a + t.length, 0) || 1;
+    const span = (+s.end) - (+s.start);
+    let cursor = +s.start;
+    for (const tok of toks) {
+      const dur = span * (tok.length / totalChars);
+      out.push({ text: tok, start: cursor, end: cursor + dur, approx: true });
+      cursor += dur;
+    }
+  }
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// A.1 — Re-segmentação por ritmo de leitura
+// ════════════════════════════════════════════════════════════════════════════
+const CONJ_PREP = new Set(['e', 'mas', 'que', 'porque', 'porém', 'porem', 'então', 'entao', 'pois', 'se', 'quando', 'como', 'para', 'pra', 'por', 'com', 'sem', 'de', 'em', 'a', 'o']);
+const NO_BREAK_AFTER = new Set(['a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas', 'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas', 'por', 'para', 'pra', 'com', 'sem', 'ao', 'à']);
+
+function cps(text, durS) {
+  const len = text.replace(/\s/g, '').length;
+  return durS > 0 ? len / durS : Infinity;
+}
+
+// Quebra a lista de palavras em blocos respeitando CPS, chars/linha, duração e
+// fronteiras sintáticas. Retorna [{words, start, end, text, lines}].
+function resegmentCaptions(words, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const ws = (words || []).filter(w => w.text);
+  if (!ws.length) return [];
+
+  const blocks = [];
+  let cur = [];
+
+  const blockText = arr => arr.map(w => w.text).join(' ');
+  const blockDur = arr => arr[arr.length - 1].end - arr[0].start;
+
+  const flush = () => { if (cur.length) { blocks.push(cur); cur = []; } };
+
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i];
+    cur.push(w);
+    const text = blockText(cur);
+    const dur = blockDur(cur);
+    const endsSentence = /[.!?…]$/.test(w.text);
+    const charCount = text.length;
+    const wouldExceedCps = cps(text, Math.max(dur, 0.01)) > c.cpsIdealHigh;
+    const tooLong = charCount > c.maxCharsPerLine * c.maxLines;
+    const tooSlowDur = dur >= c.blockMaxS;
+
+    if (endsSentence) { flush(); continue; }
+
+    if (tooLong || tooSlowDur || (charCount > c.maxCharsPerLine && wouldExceedCps)) {
+      // procura ponto de quebra sintático melhor dentro da janela atual
+      let breakIdx = -1;
+      // 1) após pontuação fraca
+      for (let j = cur.length - 2; j >= 1; j--) { if (/[,;:]$/.test(cur[j].text)) { breakIdx = j; break; } }
+      // 2) antes de conjunção/preposição (sem quebrar após artigo/prep)
+      if (breakIdx < 0) {
+        for (let j = cur.length - 1; j >= 1; j--) {
+          const prev = cur[j - 1].text.toLowerCase().replace(/[.,;:!?…]/g, '');
+          const tok = cur[j].text.toLowerCase().replace(/[.,;:!?…]/g, '');
+          if (CONJ_PREP.has(tok) && !NO_BREAK_AFTER.has(prev)) { breakIdx = j - 1; break; }
+        }
+      }
+      if (breakIdx >= 1) {
+        const rest = cur.slice(breakIdx + 1);
+        blocks.push(cur.slice(0, breakIdx + 1));
+        cur = rest;
+      } else {
+        flush();
+      }
+    }
+  }
+  flush();
+
+  // Materializa blocos com tempos, duração mínima/máxima e linhas
+  const out = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const arr = blocks[i];
+    const start = arr[0].start;
+    let end = arr[arr.length - 1].end;
+    if (end - start < c.blockMinS) end = start + c.blockMinS;
+    if (end - start > c.blockMaxS) end = start + c.blockMaxS;
+    out.push({ words: arr, start, end, text: blockText(arr), lines: wrapLines(blockText(arr), c.maxCharsPerLine, c.maxLines) });
+  }
+  return out;
+}
+
+// Quebra texto em até maxLines linhas de até maxChars, sem cortar palavra.
+function wrapLines(text, maxChars, maxLines) {
+  const words = text.split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    if (!line) { line = w; continue; }
+    if ((line + ' ' + w).length <= maxChars) line += ' ' + w;
+    else { lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  // se passar de maxLines, junta o excedente na última (validação pega depois)
+  if (lines.length > maxLines) {
+    const head = lines.slice(0, maxLines - 1);
+    const tail = lines.slice(maxLines - 1).join(' ');
+    return [...head, tail];
+  }
+  return lines;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// A.2 — Revisão de português via LLM (Anthropic Haiku)
+// ════════════════════════════════════════════════════════════════════════════
+let _anthropic = null;
+function getAnthropic() {
+  if (_anthropic) return _anthropic;
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const Anthropic = require('@anthropic-ai/sdk');
+  _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 40_000, maxRetries: 2 });
+  return _anthropic;
+}
+
+// Modelo: Haiku por custo/velocidade (revisão é tarefa simples de correção).
+// Sobrescrevível por CAPTION_REVIEW_MODEL.
+const REVIEW_MODEL = process.env.CAPTION_REVIEW_MODEL || 'claude-3-5-haiku-latest';
+
+// Revisa o texto dos blocos preservando contagem e timestamps. Em qualquer
+// falha/divergência de contagem → retorna os blocos originais (nunca quebra).
+async function reviewCaptionsPT(blocks, { glossario = [] } = {}) {
+  const client = getAnthropic();
+  if (!client || !blocks.length) return { blocks, reviewed: false, reason: client ? 'sem blocos' : 'ANTHROPIC_API_KEY ausente' };
+
+  const payload = blocks.map((b, i) => ({ id: i + 1, texto: b.text }));
+  const glossTxt = glossario.length ? `\nGlossário (mantenha estes termos exatos): ${glossario.join(', ')}.` : '';
+  const system = `Você revisa legendas em português (transcrição de fala). Corrija APENAS: pontuação, maiúsculas, números, valores em R$, siglas e erros óbvios de transcrição. NUNCA reescreva, resuma, traduza ou mude o sentido. Mantenha exatamente o que foi dito.${glossTxt}
+Responda SOMENTE com JSON válido, mesma quantidade de itens, no formato: [{"id":1,"texto":"..."}]`;
+
+  try {
+    const msg = await client.messages.create({
+      model: REVIEW_MODEL,
+      max_tokens: 2000,
+      system,
+      messages: [{ role: 'user', content: `Revise:\n${JSON.stringify(payload, null, 0)}` }],
+    });
+    const text = (msg.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    let parsed;
+    try { parsed = JSON.parse(clean); }
+    catch { const m = clean.match(/\[[\s\S]*\]/); parsed = m ? JSON.parse(m[0]) : null; }
+
+    if (!Array.isArray(parsed) || parsed.length !== blocks.length) {
+      return { blocks, reviewed: false, reason: `contagem divergente (${parsed?.length} vs ${blocks.length})` };
+    }
+    // Aplica texto revisado preservando words/timestamps; re-wrap linhas
+    const byId = new Map(parsed.map(p => [Number(p.id), String(p.texto || '')]));
+    const reviewed = blocks.map((b, i) => {
+      const novo = byId.get(i + 1);
+      if (!novo || !novo.trim()) return b;
+      return { ...b, text: novo.trim(), lines: wrapLines(novo.trim(), DEFAULTS.maxCharsPerLine, DEFAULTS.maxLines) };
+    });
+    return { blocks: reviewed, reviewed: true };
+  } catch (e) {
+    return { blocks, reviewed: false, reason: e.message };
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// A.3 — Validação (gate antes do render) — com auto-fix opcional
+// ════════════════════════════════════════════════════════════════════════════
+function validateCaptions(blocks, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const issues = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const dur = b.end - b.start;
+    const blockCps = cps(b.text, dur);
+    const tc = `${b.start.toFixed(2)}s`;
+    if (blockCps > c.cpsMax) issues.push({ i, nivel: 'erro', regra: 'cps', detalhe: `${blockCps.toFixed(1)} CPS (>${c.cpsMax})`, tc });
+    else if (blockCps > c.cpsIdealHigh) issues.push({ i, nivel: 'alerta', regra: 'cps', detalhe: `${blockCps.toFixed(1)} CPS`, tc });
+    if (dur < c.blockMinS) issues.push({ i, nivel: 'erro', regra: 'duracao', detalhe: `${dur.toFixed(2)}s (<${c.blockMinS})`, tc });
+    if ((b.lines || []).some(l => l.length > c.maxCharsPerLine)) issues.push({ i, nivel: 'erro', regra: 'linha', detalhe: `linha >${c.maxCharsPerLine} chars`, tc });
+    if ((b.lines || []).length > c.maxLines) issues.push({ i, nivel: 'erro', regra: 'linhas', detalhe: `${b.lines.length} linhas (>${c.maxLines})`, tc });
+    const next = blocks[i + 1];
+    if (next && b.end > next.start + 0.001) issues.push({ i, nivel: 'erro', regra: 'overlap', detalhe: 'sobreposição', tc });
+  }
+  return { ok: !issues.some(x => x.nivel === 'erro'), issues };
+}
+
+// Auto-fix: estende durações curtas, remove overlaps. Não conserta CPS alto
+// (isso exigiria re-segmentar/encurtar texto — feito na re-segmentação).
+function autoFixCaptions(blocks, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const out = blocks.map(b => ({ ...b }));
+  for (let i = 0; i < out.length; i++) {
+    const b = out[i];
+    if (b.end - b.start < c.blockMinS) b.end = b.start + c.blockMinS;
+    const next = out[i + 1];
+    if (next && b.end > next.start) b.end = Math.max(b.start + 0.3, next.start - 0.02);
+  }
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// A.4 — Geração de ASS com karaoke (palavra ativa colorida)
+// ════════════════════════════════════════════════════════════════════════════
+// #RRGGBB → ASS &HAABBGGRR (BGR, AA=00 opaco)
+function hexToAss(hex, alpha = '00') {
+  const h = hex.replace('#', '');
+  const r = h.slice(0, 2), g = h.slice(2, 4), b = h.slice(4, 6);
+  return `&H${alpha}${b}${g}${r}`.toUpperCase();
+}
+function assTime(s) {
+  s = Math.max(0, s);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const cs = Math.round((s - Math.floor(s)) * 100);
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return `${h}:${p(m)}:${p(sec)}.${p(cs)}`;
+}
+
+// Gera string .ass. Se os blocos têm words com tempo (word_level), usa \k para
+// karaoke; senão escreve o bloco inteiro (sem destaque por palavra).
+function buildAss(blocks, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const primary = hexToAss(c.primaryColor);
+  const karaoke = hexToAss(c.karaokeColor);
+  const playResY = 720;
+  const fontSize = Math.round(playResY * 0.055); // ~5.5% da altura
+
+  const header = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: ${playResY}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,${c.fontName},${fontSize},${primary},${karaoke},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,2,70,70,60,1
+
+[Events]
+Format: Layer, Start, End, Style, MarginL, MarginR, MarginV, Effect, Text`;
+
+  const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
+
+  const lines = blocks.map(b => {
+    let body;
+    const hasWordTimes = Array.isArray(b.words) && b.words.length && b.words.every(w => Number.isFinite(w.start) && Number.isFinite(w.end));
+    if (hasWordTimes) {
+      // \kf<centésimos> por palavra → preenche a cor da palavra ativa
+      body = b.words.map((w, idx) => {
+        const durCs = Math.max(1, Math.round((w.end - w.start) * 100));
+        const sep = idx < b.words.length - 1 ? ' ' : '';
+        return `{\\kf${durCs}}${escape(w.text)}${sep}`;
+      }).join('');
+    } else {
+      body = escape((b.lines || [b.text]).join('\\N'));
+    }
+    return `Dialogue: 0,${assTime(b.start)},${assTime(b.end)},Default,,0,0,0,,${body}`;
+  });
+
+  return header + '\n' + lines.join('\n') + '\n';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// B-1 — Jump cut: detecção (dual signal: Whisper word-gaps ∩ silencedetect)
+// ════════════════════════════════════════════════════════════════════════════
+// silenceDetectIntervals: [{start,end}] vindos do FFmpeg silencedetect (acústico)
+// words: [{text,start,end}] do Whisper (pode ser vazio → cai p/ silencedetect-only)
+// Retorna { cuts:[{start,end,reason}], keep:[{start,end}], stats }
+function detectJumpCuts(duration, silenceIntervals, words, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const minGap = AGGRESSION_GAP_S[c.aggressiveness] ?? AGGRESSION_GAP_S.medio;
+  const hasWords = Array.isArray(words) && words.length > 0;
+
+  // Lacunas de fala a partir das palavras (word_level preciso)
+  const wordGaps = [];
+  if (hasWords) {
+    const sorted = [...words].sort((a, b) => a.start - b.start);
+    if (sorted[0].start > minGap) wordGaps.push({ start: 0, end: sorted[0].start });
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i].start - sorted[i - 1].end;
+      if (gap >= minGap) wordGaps.push({ start: sorted[i - 1].end, end: sorted[i].start });
+    }
+    const last = sorted[sorted.length - 1];
+    if (duration - last.end > minGap) wordGaps.push({ start: last.end, end: duration });
+  }
+
+  // Interseção de dois intervalos
+  const overlap = (a, b) => {
+    const s = Math.max(a.start, b.start), e = Math.min(a.end, b.end);
+    return e > s ? { start: s, end: e } : null;
+  };
+
+  // Decide cortes: onde AMBOS concordam (acústico ∩ word-gap). Sem words →
+  // usa só silencedetect (documentado como menos preciso).
+  let rawCuts = [];
+  if (hasWords) {
+    for (const si of silenceIntervals) {
+      for (const wg of wordGaps) {
+        const ov = overlap(si, wg);
+        if (ov && (ov.end - ov.start) >= minGap) rawCuts.push({ ...ov, reason: 'silencio+lacuna' });
+      }
+    }
+  } else {
+    rawCuts = silenceIntervals.filter(s => (s.end - s.start) >= minGap).map(s => ({ ...s, reason: 'silencedetect' }));
+  }
+
+  // Hesitações isoladas (palavra curta de preenchimento cercada por gaps) →
+  // marca como corte opcional/agressivo
+  if (hasWords && c.aggressiveness === 'agressivo') {
+    for (const w of words) {
+      const t = w.text.toLowerCase().replace(/[.,;:!?…]/g, '');
+      if (HESITATIONS.has(t) && (w.end - w.start) < 0.6) rawCuts.push({ start: w.start, end: w.end, reason: 'hesitacao' });
+    }
+  }
+
+  // Aplica padding de segurança (encolhe o corte p/ não comer sílaba) e
+  // preserva pausa retórica: a 1ª pausa logo após pontuação forte, se 0.5–0.9s,
+  // NÃO é cortada (respiro proposital).
+  const strongPunctEnds = new Set();
+  if (hasWords) {
+    for (const w of words) if (/[.!?]$/.test(w.text)) strongPunctEnds.add(Math.round(w.end * 100));
+  }
+  const cuts = [];
+  for (const cut of rawCuts) {
+    const s = cut.start + c.padBeforeS;
+    const e = cut.end - c.padAfterS;
+    const len = e - s;
+    if (len <= 0.05) continue;
+    // pausa retórica: começa logo após fim de palavra com pontuação forte?
+    const afterStrong = strongPunctEnds.has(Math.round(cut.start * 100));
+    if (afterStrong && (cut.end - cut.start) >= 0.5 && (cut.end - cut.start) <= 0.9 && cut.reason !== 'hesitacao') {
+      continue; // preserva respiro retórico
+    }
+    cuts.push({ start: +s.toFixed(3), end: +e.toFixed(3), reason: cut.reason });
+  }
+
+  // Mescla cortes sobrepostos/adjacentes
+  cuts.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const cut of cuts) {
+    const last = merged[merged.length - 1];
+    if (last && cut.start <= last.end + 0.02) { last.end = Math.max(last.end, cut.end); }
+    else merged.push({ ...cut });
+  }
+
+  // Segmentos a MANTER (complemento dos cortes)
+  const keep = [];
+  let cursor = 0;
+  for (const cut of merged) {
+    if (cut.start > cursor + 0.05) keep.push({ start: +cursor.toFixed(3), end: +cut.start.toFixed(3) });
+    cursor = cut.end;
+  }
+  if (cursor < duration - 0.05) keep.push({ start: +cursor.toFixed(3), end: +duration.toFixed(3) });
+
+  const removed = merged.reduce((a, x) => a + (x.end - x.start), 0);
+  return {
+    cuts: merged,
+    keep,
+    stats: {
+      mode: hasWords ? 'preciso (word-gap ∩ silencedetect)' : 'aproximado (silencedetect)',
+      duration_original: +duration.toFixed(2),
+      duration_estimada: +(duration - removed).toFixed(2),
+      removido_s: +removed.toFixed(2),
+      n_cortes: merged.length,
+    },
+  };
+}
+
+// Constrói o complexFilter do FFmpeg para concatenar os segmentos KEEP, com
+// micro-crossfade de áudio nas emendas (acrossfade) p/ evitar clique/estalo.
+// Recodifica (corte frame-accurate). Retorna { filter, maps } ou null.
+function buildKeepFilter(keep, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  if (!keep || keep.length === 0) return null;
+  if (keep.length === 1) {
+    // 1 segmento → trim simples, sem concat/crossfade
+    const k = keep[0];
+    return {
+      filter: `[0:v]trim=${k.start}:${k.end},setpts=PTS-STARTPTS[vout];[0:a]atrim=${k.start}:${k.end},asetpts=PTS-STARTPTS[aout]`,
+      maps: ['[vout]', '[aout]'],
+    };
+  }
+  const xfade = Math.max(0.003, c.crossfadeMs / 1000);
+  const v = [], a = [];
+  keep.forEach((k, i) => {
+    v.push(`[0:v]trim=${k.start}:${k.end},setpts=PTS-STARTPTS[v${i}]`);
+    a.push(`[0:a]atrim=${k.start}:${k.end},asetpts=PTS-STARTPTS[a${i}]`);
+  });
+  // vídeo: concat direto (corte seco no vídeo é ok; o estalo é problema de áudio)
+  const vConcatInputs = keep.map((_, i) => `[v${i}]`).join('');
+  const vConcat = `${vConcatInputs}concat=n=${keep.length}:v=1:a=0[vout]`;
+  // áudio: acrossfade encadeado entre segmentos consecutivos
+  const aChain = [];
+  let prev = 'a0';
+  for (let i = 1; i < keep.length; i++) {
+    const out = i === keep.length - 1 ? 'aout' : `ax${i}`;
+    aChain.push(`[${prev}][a${i}]acrossfade=d=${xfade.toFixed(3)}:c1=tri:c2=tri[${out}]`);
+    prev = out;
+  }
+  const filter = [...v, ...a, vConcat, ...aChain].join(';');
+  return { filter, maps: ['[vout]', '[aout]'] };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// B-2 — Ritmo visual / pattern interrupt
+// ════════════════════════════════════════════════════════════════════════════
+// events: lista de timestamps (s) de mudanças visuais (cortes, zooms, overlays).
+// Retorna análise + sugestões de zoom para trechos parados.
+function analyzeVisualRhythm(duration, events, cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const pts = [...new Set([0, ...(events || []).filter(t => t > 0 && t < duration), duration])].sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < pts.length; i++) {
+    const len = pts[i] - pts[i - 1];
+    let flag;
+    if (len < c.visualIdealLowS) flag = '⚡rapido';
+    else if (len <= c.visualIdealHighS) flag = '🟢ideal';
+    else if (len <= c.visualSlowS) flag = '🟡lento';
+    else flag = '🔴parado';
+    gaps.push({ start: +pts[i - 1].toFixed(2), end: +pts[i].toFixed(2), dur: +len.toFixed(2), flag });
+  }
+  const avg = gaps.length ? gaps.reduce((a, g) => a + g.dur, 0) / gaps.length : 0;
+  const parados = gaps.filter(g => g.dur > c.visualSlowS);
+  // Sugestão de zoom: trecho parado → zoom suave centralizado 1.0→1.08 em 0.5s
+  const zoomSuggestions = parados.map(g => ({
+    start: g.start, end: g.end,
+    zoom: { from: 1.0, to: 1.08, rampS: 0.5, center: 'face_center_assumido' },
+  }));
+  return {
+    ritmo_medio_s: +avg.toFixed(2),
+    n_eventos: pts.length - 2,
+    gaps,
+    trechos_parados: parados,
+    zoom_suggestions: zoomSuggestions,
+  };
+}
+
+// Filtro de zoom suave centralizado (zoompan) para um trecho [start,end].
+// Arquitetura permite trocar center por coords de face-tracking no futuro.
+function buildZoomFilter(start, end, fps = 30, from = 1.0, to = 1.08, rampS = 0.5) {
+  const rampFrames = Math.max(1, Math.round(rampS * fps));
+  // z cresce de `from` a `to` ao longo de rampFrames e segura em `to`
+  const z = `min(${from}+(${(to - from).toFixed(4)})*on/${rampFrames}\\,${to})`;
+  return `zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:fps=${fps}`;
+}
+
+// Re-mapeia tempos das palavras para o timeline APÓS o corte (keep segments).
+// Palavras dentro de trechos removidos são descartadas; as que sobram têm o
+// tempo deslocado pela soma das durações removidas antes delas. Determinístico.
+function remapWordsThroughKeep(words, keep) {
+  if (!Array.isArray(keep) || !keep.length) return words || [];
+  const out = [];
+  for (const w of (words || [])) {
+    // acha o segmento keep que contém o início da palavra
+    let newStart = null, removedBefore = 0;
+    for (const k of keep) {
+      if (w.start >= k.start && w.start < k.end) {
+        // soma do que foi removido antes deste keep
+        newStart = w.start - removedBeforeKeep(keep, k);
+        break;
+      }
+    }
+    if (newStart === null) continue; // palavra caiu num trecho cortado
+    const dur = Math.max(0.05, w.end - w.start);
+    out.push({ text: w.text, start: +newStart.toFixed(3), end: +(newStart + dur).toFixed(3) });
+  }
+  return out;
+}
+function removedBeforeKeep(keep, target) {
+  // tempo total entre o início (0) e o início do keep `target` que NÃO é keep
+  let removed = 0, cursor = 0;
+  for (const k of keep) {
+    if (k === target) { removed += Math.max(0, k.start - cursor); break; }
+    removed += Math.max(0, k.start - cursor);
+    cursor = k.end;
+  }
+  return removed;
+}
+
+// ── EDL (lista de edição não-destrutiva) ─────────────────────────────────────
+function writeEdl(sessionDir, edl) {
+  try {
+    const p = path.join(sessionDir, 'edl.json');
+    fs.writeFileSync(p, JSON.stringify(edl, null, 2));
+    return p;
+  } catch { return null; }
+}
+
+module.exports = {
+  DEFAULTS,
+  AGGRESSION_GAP_S,
+  detectTimestampGranularity,
+  flattenWords,
+  approxWordsFromSegments,
+  resegmentCaptions,
+  wrapLines,
+  reviewCaptionsPT,
+  REVIEW_MODEL,
+  validateCaptions,
+  autoFixCaptions,
+  buildAss,
+  hexToAss,
+  detectJumpCuts,
+  buildKeepFilter,
+  analyzeVisualRhythm,
+  buildZoomFilter,
+  remapWordsThroughKeep,
+  writeEdl,
+};
