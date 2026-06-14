@@ -162,6 +162,13 @@ function renderApp() {
 
   root.innerHTML = `
     <div id="app">
+      <header id="topbar">
+        <button id="nav-toggle" aria-label="Menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <div class="topbar-logo">Table<span>Clinic</span></div>
+      </header>
+      <div id="nav-backdrop"></div>
       <nav id="sidebar">
         <div class="logo">Table<span>Clinic</span></div>
         <ul>${menuItems}</ul>
@@ -176,8 +183,15 @@ function renderApp() {
     <div id="toast"></div>
   `;
 
+  // Drawer mobile: abre/fecha o sidebar
+  const closeNav = () => document.getElementById('app')?.classList.remove('nav-open');
+  document.getElementById('nav-toggle')?.addEventListener('click', () => {
+    document.getElementById('app')?.classList.toggle('nav-open');
+  });
+  document.getElementById('nav-backdrop')?.addEventListener('click', closeNav);
+
   document.querySelectorAll('nav a[data-page]').forEach(a => {
-    a.addEventListener('click', e => { e.preventDefault(); navigate(a.dataset.page); });
+    a.addEventListener('click', e => { e.preventDefault(); navigate(a.dataset.page); closeNav(); });
   });
 
   document.getElementById('logout-btn').addEventListener('click', e => { e.preventDefault(); logout(); });
@@ -306,7 +320,7 @@ async function calendario(el) {
         <span style="font-family:'Cormorant Garamond',serif;font-size:1.2rem">${date.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</span>
         <button class="btn btn-sm btn-outline" id="next-month">›</button>
       </div>
-      <div class="calendar-grid">
+      <div class="cal-scroll"><div class="calendar-grid">
         ${['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d=>`<div class="cal-header">${d}</div>`).join('')}
     `;
 
@@ -322,7 +336,7 @@ async function calendario(el) {
         ${dayCards.map(c=>`<div class="cal-card pilar-${c.pilar}" data-id="${c.id}" title="${safeHtml(c.title)}">${safeHtml(c.title)}</div>`).join('')}
       </div>`;
     }
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
@@ -338,7 +352,7 @@ async function calendario(el) {
         <span style="font-family:'Cormorant Garamond',serif;font-size:1.1rem">${days[0].toLocaleDateString('pt-BR',{day:'2-digit',month:'short'})} – ${days[6].toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'})}</span>
         <button class="btn btn-sm btn-outline" id="next-week">›</button>
       </div>
-      <div class="week-grid">
+      <div class="cal-scroll"><div class="week-grid">
     `;
 
     days.forEach(d => {
@@ -353,7 +367,7 @@ async function calendario(el) {
         </div>
       `;
     });
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 

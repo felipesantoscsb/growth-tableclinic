@@ -441,10 +441,72 @@ main#content {
 #toast.error { background: #c0392b; color: white; }
 
 /* ── Responsive ── */
+/* Topbar mobile — escondida no desktop */
+#topbar { display: none; }
+
 @media (max-width: 768px) {
-  nav#sidebar { display: none; }
-  main#content { margin-left: 0; padding: 16px; }
+  /* Topbar fixa com hambúrguer */
+  #topbar {
+    display: flex; align-items: center; gap: 12px;
+    position: fixed; top: 0; left: 0; right: 0; height: 56px; z-index: 200;
+    background: var(--verde); color: var(--bege); padding: 0 16px;
+    padding-top: env(safe-area-inset-top); height: calc(56px + env(safe-area-inset-top));
+  }
+  #nav-toggle {
+    background: none; border: none; color: var(--bege); cursor: pointer;
+    width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: -8px;
+  }
+  #nav-toggle svg { width: 24px; height: 24px; }
+  .topbar-logo { font-family: 'Cormorant Garamond', serif; font-size: 1.2rem; font-weight: 600; }
+  .topbar-logo span { color: var(--terracota); }
+
+  /* Sidebar vira drawer deslizante */
+  nav#sidebar {
+    width: 80%; max-width: 300px;
+    transform: translateX(-100%); transition: transform .25s ease;
+    padding-top: calc(24px + env(safe-area-inset-top));
+  }
+  #app.nav-open nav#sidebar { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.3); }
+
+  /* Backdrop */
+  #nav-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 99;
+  }
+  #app.nav-open #nav-backdrop { display: block; }
+
+  /* Conteúdo abaixo da topbar */
+  main#content {
+    margin-left: 0; padding: 16px;
+    padding-top: calc(56px + env(safe-area-inset-top) + 16px);
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  /* iOS: input < 16px faz zoom no foco — força 16px */
+  .form-group input, .form-group select, .form-group textarea,
+  .input, .ed-textarea, select, input, textarea { font-size: 16px; }
+
+  /* Links da nav: alvo de toque maior */
+  nav#sidebar ul li a { padding: 14px 24px; font-size: 1rem; }
+
+  /* Grids densos viram 1 coluna */
+  .ed-metrics-grid { grid-template-columns: 1fr 1fr; }
+  .mn-grid, .rd-grid, .ed-editoria-grid { grid-template-columns: 1fr; }
+  .ed-two-col { grid-template-columns: 1fr; }
+  .sem-fases { flex-direction: column; }
+  .ed-summary { gap: 8px; }
+  .ed-stat { flex: 1 1 calc(50% - 8px); min-width: 0; }
+
+  /* Calendário: rola horizontal em vez de espremer 7 colunas */
+  .cal-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .calendar-grid, .week-grid { min-width: 640px; }
+
+  /* Tabelas largas rolam */
+  .ed-table-wrap { -webkit-overflow-scrolling: touch; }
 }
+
+/* Evita scroll do body quando o drawer está aberto */
+#app.nav-open { overflow: hidden; }
 
 /* ── Ad copy card ── */
 .ad-copy-card {
