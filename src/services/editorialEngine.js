@@ -622,21 +622,28 @@ const RADAR_QUERIES_DEFAULT = [
 
 const RADAR_SYSTEM = `Você analisa temas para @nutrievelynliu, nutricionista comportamental (os 4 padrões, GLP-1, absolvição). Score de aderência = o tema permite à Evelyn dizer algo que SÓ a tese dela diz? Responda SOMENTE JSON: { tema, resumo, fonte_url, score_aderencia, score_justificativa, editoria_sugerida }`;
 
-// Processa UMA query: web search (com fallback) → parse → insert. Retorna o tema inserido.
+// Extrai texto de blocos type:'text' da resposta (ignora server_tool_use/results).
+function extractRadarText(msg) {
+  if (!msg || !Array.isArray(msg.content)) return '';
+  return msg.content.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+}
+
+// Processa UMA query: web search (GA) → fallback conhecimento → parse → insert.
+// Web search é GA no endpoint padrão (messages.create), sem beta header.
 async function runRadarQuery(query) {
-  let text;
+  let text = '';
   let webErrMsg = null;
 
-  // 1) Tenta web search (beta). Se falhar, registra o motivo e cai pro fallback.
+  // 1) Web search via endpoint GA (sem beta). Falha → registra motivo, cai pro fallback.
   try {
-    const msg = await client.beta.messages.create({
+    const msg = await client.messages.create({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: 1500,
       system: RADAR_SYSTEM,
-      messages: [{ role: 'user', content: `Pesquise e analise: ${query}` }],
+      messages: [{ role: 'user', content: `Pesquise notícias recentes e analise: ${query}` }],
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
     });
-    text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    text = extractRadarText(msg);
   } catch (webErr) {
     webErrMsg = webErr?.message || String(webErr);
     console.warn(`[radar] web search falhou ("${query}"): ${webErrMsg} — usando fallback`);
@@ -651,9 +658,9 @@ async function runRadarQuery(query) {
         system: RADAR_SYSTEM,
         messages: [{ role: 'user', content: `Com base no seu conhecimento atual, analise o tema: ${query}` }],
       });
-      text = fallback.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+      text = extractRadarText(fallback);
     } catch (fbErr) {
-      throw new Error(`web search: ${webErrMsg || 'n/a'} | fallback: ${fbErr?.message || fbErr}`);
+      throw new Error(`[${MODEL}] web: ${webErrMsg || 'n/a'} | fallback: ${fbErr?.message || fbErr}`);
     }
   }
 

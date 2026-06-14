@@ -1817,17 +1817,23 @@ async function editorial(el) {
           }
 
           // done
+          btn.disabled = false; btn.textContent = '▶ Rodar radar (IA + web)';
           const n = st.temas?.length || 0;
           const errDetail = (st.errors?.length)
             ? `<div class="ed-warnings">${st.errors.map(e => `<div>⚠ ${safeHtml(e.query || '')}: ${safeHtml(e.error || JSON.stringify(e))}</div>`).join('')}</div>`
             : '';
-          const cls = n > 0 ? 'ed-result-ok' : 'ed-result-err';
-          res.innerHTML = `<div class="ed-result-box ${cls}">${n} temas encontrados${st.errors?.length ? ` · ${st.errors.length} erros` : ''}${errDetail}</div>`;
-          if (n > 0) toast(`${n} temas adicionados!`);
-          else toast('Radar não retornou temas — veja o detalhe do erro', 'error');
-          const fresh = await api('GET', '/editorial/radar');
-          el.querySelector('.ed-section').outerHTML = renderRadar(fresh);
-          bindRadar();
+
+          if (n > 0) {
+            // Há temas novos → re-renderiza a seção. Erros (se houver) viram toast.
+            toast(`${n} temas adicionados!${st.errors?.length ? ` (${st.errors.length} falharam)` : ''}`);
+            const fresh = await api('GET', '/editorial/radar');
+            el.querySelector('.ed-section').outerHTML = renderRadar(fresh);
+            bindRadar();
+          } else {
+            // Zero temas → NÃO re-renderiza (senão apaga o detalhe do erro). Mantém visível.
+            res.innerHTML = `<div class="ed-result-box ed-result-err">Radar não retornou temas${st.errors?.length ? ` · ${st.errors.length} erro(s)` : ''}${errDetail}</div>`;
+            toast('Radar não retornou temas — veja o detalhe abaixo', 'error');
+          }
         };
         setTimeout(poll, 3000);
       } catch (err) {
