@@ -540,7 +540,7 @@ function burnAss(inputPath, assPath, outPath, { muteAudio = false } = {}) {
       .videoFilters(`subtitles='${escaped}'${fontsArg}`)
       .outputOptions(['-c:v libx264', '-preset fast', '-crf 20', ...audioOpts, '-movflags +faststart', '-pix_fmt yuv420p'])
       .output(outPath)
-      .on('start', () => console.log('[FFmpeg] Queimando legendas ASS (karaoke)...'))
+      .on('start', () => console.log('[FFmpeg] Queimando legendas ASS (amarela estática)...'))
       .on('end', () => { try { fs.unlinkSync(safePath); } catch {} resolve(); })
       .on('error', err => { try { fs.unlinkSync(safePath); } catch {} reject(err); })
       .run();
@@ -572,11 +572,15 @@ async function buildOptimizedCaptions(words, sessionDir, cfg = {}) {
   }
   report.layers.validate = { ok: val.ok, issues: val.issues.length };
 
-  // A.4 ASS karaoke
+  // A.4 ASS
   const ass = VE.buildAss(blocks, cfg);
   const assPath = path.join(sessionDir, 'subs.ass');
   fs.writeFileSync(assPath, ass);
   report.captionStarts = blocks.map(b => b.start);
+  // DIAGNÓSTICO (build 536adf7+): mostra o texto REAL que vai pro ASS — se houver
+  // vírgula no início aqui, é código; se não houver aqui mas aparecer no vídeo,
+  // é build velho/cache servindo no Railway.
+  console.log('[caption-debug] build=virgula-fix | blocos:', JSON.stringify(blocks.slice(0, 6).map(b => b.lines?.[0] || b.text)));
   return { assPath, report, blocks };
 }
 
