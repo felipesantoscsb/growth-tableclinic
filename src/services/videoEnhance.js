@@ -116,67 +116,73 @@ function cps(text, durS) {
 
 // Quebra a lista de palavras em blocos respeitando CPS, chars/linha, duração e
 // fronteiras sintáticas. Retorna [{words, start, end, text, lines}].
+// Limpa pontuação solta no INÍCIO do bloco (vírgula/ponto-e-vírgula órfãos que
+// sobram quando uma frase longa é subdividida) e espaços duplicados.
+function cleanBlockText(t) {
+  return String(t || '').replace(/^[\s,;:.!?…»)\]-]+/, '').replace(/\s+/g, ' ').trim();
+}
+
+// SENTENÇA-PRIMEIRO: nenhum bloco cruza fronteira de frase. Agrupa palavras em
+// frases (terminam em .!?…); cada frase vira 1+ blocos. Frase que cabe = 1 bloco;
+// frase longa é subdividida internamente em vírgula/conjunção, respeitando o
+// teto de palavras/chars. A última legenda de uma frase fecha exatamente onde a
+// fala termina (encaixe), e a próxima começa já com a frase nova.
 function resegmentCaptions(words, cfg = {}) {
   const c = { ...DEFAULTS, ...cfg };
   const ws = (words || []).filter(w => w.text);
   if (!ws.length) return [];
 
-  const blocks = [];
+  const text = arr => arr.map(w => w.text).join(' ');
+
+  // 1) quebra em frases
+  const sentences = [];
   let cur = [];
-
-  const blockText = arr => arr.map(w => w.text).join(' ');
-  const blockDur = arr => arr[arr.length - 1].end - arr[0].start;
-
-  const flush = () => { if (cur.length) { blocks.push(cur); cur = []; } };
-
-  for (let i = 0; i < ws.length; i++) {
-    const w = ws[i];
+  for (const w of ws) {
     cur.push(w);
-    const text = blockText(cur);
-    const dur = blockDur(cur);
-    const endsSentence = /[.!?…]$/.test(w.text);
-    const charCount = text.length;
-    const wouldExceedCps = cps(text, Math.max(dur, 0.01)) > c.cpsIdealHigh;
-    const tooLong = charCount > c.maxCharsPerLine * c.maxLines;
-    const tooManyWords = cur.length >= c.maxWords;   // teto de palavras (encaixe punchy)
-    const tooSlowDur = dur >= c.blockMaxS;
+    if (/[.!?…]$/.test(w.text)) { sentences.push(cur); cur = []; }
+  }
+  if (cur.length) sentences.push(cur);
 
-    // Fim de sentença SEMPRE fecha o bloco (encaixe: a fala termina junto com a legenda)
-    if (endsSentence) { flush(); continue; }
+  // 2) subdivide cada frase em blocos (sem cruzar a fronteira da frase)
+  const blocks = [];
+  for (const sent of sentences) {
+    const fits = sent.length <= c.maxWords && text(sent).length <= c.maxCharsPerLine * c.maxLines;
+    if (fits) { blocks.push(sent); continue; }
 
-    if (tooManyWords || tooLong || tooSlowDur || (charCount > c.maxCharsPerLine && wouldExceedCps)) {
-      // procura ponto de quebra sintático melhor dentro da janela atual
-      let breakIdx = -1;
-      // 1) após pontuação fraca
-      for (let j = cur.length - 2; j >= 1; j--) { if (/[,;:]$/.test(cur[j].text)) { breakIdx = j; break; } }
-      // 2) antes de conjunção/preposição (sem quebrar após artigo/prep)
-      if (breakIdx < 0) {
-        for (let j = cur.length - 1; j >= 1; j--) {
-          const prev = cur[j - 1].text.toLowerCase().replace(/[.,;:!?…]/g, '');
-          const tok = cur[j].text.toLowerCase().replace(/[.,;:!?…]/g, '');
-          if (CONJ_PREP.has(tok) && !NO_BREAK_AFTER.has(prev)) { breakIdx = j - 1; break; }
-        }
-      }
-      if (breakIdx >= 1) {
-        const rest = cur.slice(breakIdx + 1);
-        blocks.push(cur.slice(0, breakIdx + 1));
-        cur = rest;
-      } else {
-        flush();
+    let seg = [];
+    const flushSeg = () => { if (seg.length) { blocks.push(seg); seg = []; } };
+    for (let i = 0; i < sent.length; i++) {
+      seg.push(sent[i]);
+      const charCount = text(seg).length;
+      const tooMany = seg.length >= c.maxWords;
+      const tooLong = charCount > c.maxCharsPerLine * c.maxLines;
+      const atWeakPunct = /[,;:]$/.test(sent[i].text) && seg.length >= 2;
+      const last = i === sent.length - 1;
+      if (last) { flushSeg(); break; }
+      if (tooMany || tooLong) {
+        // tenta recuar até a última pontuação fraca da janela (quebra natural)
+        let cutAt = -1;
+        for (let j = seg.length - 2; j >= 1; j--) { if (/[,;:]$/.test(seg[j].text)) { cutAt = j; break; } }
+        if (cutAt >= 1) { blocks.push(seg.slice(0, cutAt + 1)); seg = seg.slice(cutAt + 1); }
+        else flushSeg();
+      } else if (atWeakPunct && seg.length >= Math.ceil(c.maxWords * 0.6)) {
+        flushSeg(); // quebra confortável em vírgula quando já tem corpo
       }
     }
+    flushSeg();
   }
-  flush();
 
-  // Materializa blocos com tempos, duração mínima/máxima e linhas
+  // 3) materializa blocos: tempos, duração mín/máx, texto limpo, linhas
   const out = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const arr = blocks[i];
+  for (const arr of blocks) {
+    if (!arr.length) continue;
     const start = arr[0].start;
     let end = arr[arr.length - 1].end;
     if (end - start < c.blockMinS) end = start + c.blockMinS;
     if (end - start > c.blockMaxS) end = start + c.blockMaxS;
-    out.push({ words: arr, start, end, text: blockText(arr), lines: wrapLines(blockText(arr), c.maxCharsPerLine, c.maxLines) });
+    const txt = cleanBlockText(text(arr));
+    if (!txt) continue;
+    out.push({ words: arr, start, end, text: txt, lines: wrapLines(txt, c.maxCharsPerLine, c.maxLines) });
   }
   return out;
 }
@@ -219,7 +225,8 @@ const REVIEW_MODEL = process.env.CAPTION_REVIEW_MODEL || 'claude-3-5-haiku-lates
 
 // Revisa o texto dos blocos preservando contagem e timestamps. Em qualquer
 // falha/divergência de contagem → retorna os blocos originais (nunca quebra).
-async function reviewCaptionsPT(blocks, { glossario = [] } = {}) {
+async function reviewCaptionsPT(blocks, { glossario = [], cfg = {} } = {}) {
+  const cc = { ...DEFAULTS, ...cfg };
   const client = getAnthropic();
   if (!client || !blocks.length) return { blocks, reviewed: false, reason: client ? 'sem blocos' : 'ANTHROPIC_API_KEY ausente' };
 
@@ -247,9 +254,9 @@ Responda SOMENTE com JSON válido, mesma quantidade de itens, no formato: [{"id"
     // Aplica texto revisado preservando words/timestamps; re-wrap linhas
     const byId = new Map(parsed.map(p => [Number(p.id), String(p.texto || '')]));
     const reviewed = blocks.map((b, i) => {
-      const novo = byId.get(i + 1);
-      if (!novo || !novo.trim()) return b;
-      return { ...b, text: novo.trim(), lines: wrapLines(novo.trim(), DEFAULTS.maxCharsPerLine, DEFAULTS.maxLines) };
+      const novo = cleanBlockText(byId.get(i + 1));
+      if (!novo) return b;
+      return { ...b, text: novo, lines: wrapLines(novo, cc.maxCharsPerLine, cc.maxLines) };
     });
     return { blocks: reviewed, reviewed: true };
   } catch (e) {

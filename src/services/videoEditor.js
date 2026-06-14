@@ -555,7 +555,7 @@ async function buildOptimizedCaptions(words, sessionDir, cfg = {}) {
 
   // A.2 revisão PT (best-effort)
   try {
-    const rev = await VE.reviewCaptionsPT(blocks, { glossario: cfg.glossario || [] });
+    const rev = await VE.reviewCaptionsPT(blocks, { glossario: cfg.glossario || [], cfg });
     blocks = rev.blocks;
     report.layers.review = { reviewed: rev.reviewed, reason: rev.reason || null };
   } catch (e) { report.layers.review = { reviewed: false, reason: e.message }; }
