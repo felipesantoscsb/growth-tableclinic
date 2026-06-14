@@ -63,7 +63,7 @@ function detectTimestampGranularity(whisperOutput) {
 // Limpa um TOKEN de palavra do Whisper: tira pontuação/espaço solto no INÍCIO
 // (o whisper-1 às vezes devolve ",palavra" colado) mas preserva o final (",", ".").
 function cleanWordToken(raw) {
-  return String(raw ?? '').replace(/^[\s\p{P}]+/u, '').trim();
+  return stripLeadingPunct(String(raw ?? '')).trim();
 }
 
 // Normaliza qualquer shape do Whisper para uma lista plana de palavras {text,start,end}
@@ -152,10 +152,12 @@ function cps(text, durS) {
 // fronteiras sintáticas. Retorna [{words, start, end, text, lines}].
 // Limpa pontuação solta no INÍCIO do bloco (vírgula/ponto-e-vírgula órfãos que
 // sobram quando uma frase longa é subdividida) e espaços duplicados.
-// strip de QUALQUER pontuação/espaço unicode no início (cobre vírgula ASCII e
-// variantes: ， ‚ 、 etc.) — \p{P} = toda pontuação Unicode.
+// Remove no INÍCIO: espaço + pontuação (\p{P}) + MARCAS combinantes órfãs (\p{M},
+// ex: cedilha/vírgula-abaixo U+0327 que o Whisper-PT às vezes emite e renderiza
+// como vírgula colada) + caracteres de controle/format/zero-width (\p{C}, BOM).
+// NFC normaliza primeiro p/ colapsar sequências decompostas (é = e+´ → é).
 function stripLeadingPunct(t) {
-  return String(t || '').replace(/^[\s\p{P}]+/u, '');
+  return String(t || '').normalize('NFC').replace(/^[\s\p{P}\p{M}\p{C}​-‏﻿]+/u, '');
 }
 function cleanBlockText(t) {
   return stripLeadingPunct(String(t || '')).replace(/\s+/g, ' ').trim();
