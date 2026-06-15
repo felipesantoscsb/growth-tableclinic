@@ -11,27 +11,27 @@ if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 // Paleta e tipografia TableClinic. Marca = verde/bege/terracota; demais cores
 // liberadas para personalização por slide (o usuário pode pedir qualquer uma,
 // ou um hex). Sinônimos PT mapeados.
+// Paleta restrita à ID visual: VERDE, TERRACOTA, CREME + variações tonais
+// (claro/escuro) de cada uma. Sem cores fora da marca.
 const THEME = {
-  verde:     '#3D4A35',
-  bege:      '#F8F4EE',
-  creme:     '#F8F4EE',
-  terracota: '#B97040',
-  terracotta:'#B97040',
-  branco:    '#FFFFFF',
-  white:     '#FFFFFF',
-  preto:     '#1A1A1A',
-  black:     '#1A1A1A',
-  cinza:     '#6B6B6B',
-  grafite:   '#2A2A2A',
-  dourado:   '#C9A24B',
-  ouro:      '#C9A24B',
-  rosa:      '#D98C9A',
-  'rosa-claro':'#F3D9DE',
-  azul:      '#3A5A78',
-  'azul-claro':'#AEC6D9',
-  vermelho:  '#9E3B32',
-  oliva:     '#6B7150',
-  marrom:    '#5A4632',
+  // Verde
+  verde:           '#3D4A35',
+  'verde-escuro':  '#2A3325',
+  'verde-claro':   '#5A6B4D',
+  'verde-suave':   '#7C8A6E',
+  // Terracota
+  terracota:        '#B97040',
+  terracotta:       '#B97040',
+  'terracota-escuro':'#9A5A30',
+  'terracota-claro': '#CE8C5E',
+  'terracota-suave': '#E0AE85',
+  // Creme / bege
+  creme:        '#F8F4EE',
+  bege:         '#F8F4EE',
+  'creme-escuro':'#EDE5D8',
+  'bege-escuro': '#E8E0D4',
+  areia:        '#E3D7C3',
+  marfim:       '#FBF8F2',
 };
 
 // Cor de texto que contrasta com o fundo (luminância). Garante legibilidade em

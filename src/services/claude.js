@@ -197,9 +197,11 @@ Campos (null por padrão — preencha quando o usuário pedir):
 - title: headline/título do slide (quando o usuário marca "isso é headline").
 - signature: assinatura (ex.: "Evelyn Liu — Nutricionista"), exibida menor/itálico.
 - photo: true se pedir foto naquele slide.
-- bg: cor de fundo. Aceita nomes PT (verde, bege, creme, terracota, preto, branco,
-  cinza, dourado, rosa, azul, vermelho, oliva, marrom) OU hex (#1A1A1A). Use por
-  slide conforme o pedido; senão null (cai no padrão da marca).
+- bg: cor de fundo. APENAS a paleta da marca e suas variações tonais:
+  verde, verde-escuro, verde-claro, verde-suave, terracota, terracota-escuro,
+  terracota-claro, terracota-suave, creme, bege, creme-escuro, areia, marfim.
+  NÃO use cores fora da marca (nada de preto, branco, rosa, azul, etc.).
+  Use por slide conforme o pedido; senão null (cai no padrão da marca).
 - textColor: cor do texto, se o usuário pedir (nome PT ou hex); senão null (contraste automático).
 - accent: cor de destaque (linha/realce), se pedida; senão null.`;
 
@@ -242,8 +244,9 @@ Responda SOMENTE com JSON válido, sem nada antes ou depois:
   ],
   "legenda": null
 }
-role: "hook" primeiro, "cta" último, "content" meio. bg aceita nome PT (verde/bege/
-terracota/preto/branco/cinza/dourado/rosa/azul/vermelho/oliva/marrom) ou hex.
+role: "hook" primeiro, "cta" último, "content" meio. bg APENAS paleta da marca:
+verde/verde-escuro/verde-claro/verde-suave/terracota/terracota-escuro/terracota-claro/
+terracota-suave/creme/bege/creme-escuro/areia/marfim (nada fora da marca).
 title/signature/bg/textColor/accent = null por padrão (preencha só se o usuário pedir).`;
 
   const text = await streamText({
