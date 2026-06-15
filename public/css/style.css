@@ -508,6 +508,20 @@ main#content {
 /* Evita scroll do body quando o drawer está aberto */
 #app.nav-open { overflow: hidden; }
 
+/* ── Fila de edição de vídeo ── */
+.eq-row { background: white; border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 10px; border-left: 4px solid var(--bege-dark); }
+.eq-row.eq-queued { border-left-color: var(--muted); }
+.eq-row.eq-processing { border-left-color: var(--terracota); }
+.eq-row.eq-done { border-left-color: var(--verde); }
+.eq-row.eq-error { border-left-color: #c0392b; }
+.eq-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.eq-name { font-size: .9rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eq-badge { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); white-space: nowrap; }
+.eq-body { margin-top: 8px; }
+.eq-bar { height: 4px; background: var(--bege-dark); border-radius: 4px; overflow: hidden; }
+.eq-bar > div { height: 100%; width: 40%; background: var(--terracota); border-radius: 4px; animation: eq-indeterminate 1.2s ease-in-out infinite; }
+@keyframes eq-indeterminate { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
 /* ── Ad copy card ── */
 .ad-copy-card {
   background: white;

@@ -805,107 +805,121 @@ async function edicao(el) {
     <div style="max-width:720px">
       <div class="card" style="margin-bottom:16px">
         <div class="form-group">
-          <label>URL do vídeo (link direto para download — MP4, MOV, WebM)</label>
-          <input id="video-url" placeholder="https://seu-bucket.s3.amazonaws.com/video.mp4">
+          <label>URLs dos vídeos — <strong>uma por linha</strong> (link direto MP4/MOV/WebM)</label>
+          <textarea id="video-urls" rows="5" placeholder="https://bucket/video1.mp4&#10;https://bucket/video2.mp4&#10;https://bucket/video3.mp4"></textarea>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Cole vários links e deixe rolar — entram numa <strong>fila de produção</strong> e vão sendo entregues conforme ficam prontos.</p>
         </div>
         <div class="form-group">
-          <label>Instruções em linguagem natural <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
-          <textarea id="video-instructions" rows="5" placeholder="Ex: Adicionar legendas, converter para 9:16, reduzir volume para 50%"></textarea>
-          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Deixe em branco e ele já faz <strong>corte natural de pausas + legendas inteligentes</strong> automaticamente (ritmo preservado; legenda ≤7 palavras, no terço inferior).</p>
+          <label>Instruções em linguagem natural <span style="color:var(--muted);font-weight:400">(opcional — aplicadas a todos)</span></label>
+          <textarea id="video-instructions" rows="4" placeholder="Ex: legendas, 9:16, cortar pausas agressivo, zoom"></textarea>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Em branco já faz <strong>corte de pausas + legendas</strong> automaticamente.</p>
         </div>
-        <button class="btn btn-accent" id="edit-btn">Editar vídeo</button>
+        <button class="btn btn-accent" id="edit-btn">Adicionar à fila</button>
       </div>
 
-      <div class="card" style="background:var(--bege);border:none;box-shadow:none;padding:14px 18px">
-        <p style="font-size:.82rem;color:var(--muted);line-height:1.6">
-          <strong>Operações suportadas:</strong> corte (trim) · remover pausas/silêncios · legendas automáticas ·
-          resize 9:16 / 1:1 / 16:9 · ajuste de velocidade (0.5×–2×) · redução de volume · mudo · preto&amp;branco<br>
-          <strong>Formatos de entrada:</strong> MP4, MOV, WebM, AVI, MKV (via URL pública direta)
-        </p>
-      </div>
-
-      <div id="edit-result" style="margin-top:20px"></div>
+      <div id="edit-queue"></div>
     </div>
   `;
 
-  el.querySelector('#edit-btn').addEventListener('click', async () => {
-    const video_url = el.querySelector('#video-url').value.trim();
-    const instructions = el.querySelector('#video-instructions').value.trim();
-    if (!video_url) { toast('Informe a URL do vídeo', 'error'); return; }
-    const btn = el.querySelector('#edit-btn');
-    btn.disabled = true; btn.textContent = 'Processando...';
-    const result = document.getElementById('edit-result');
-    result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo com FFmpeg… pode levar alguns segundos.</div>';
+  const queueEl = el.querySelector('#edit-queue');
+  let seq = 0;
+  const rows = new Map();   // jobId → rowEl (jobs ainda não finalizados)
+  let pollerOn = false;
 
-    try {
-      // Edição é assíncrona: inicia o job e consulta o progresso (evita o timeout
-      // do proxy em vídeos maiores).
-      const start = await api('POST', '/edit/video', { video_url, instructions });
-      const jobId = start.job_id;
-      result.innerHTML = '<div class="loading"><div class="spinner"></div> Editando vídeo… pode levar de alguns segundos a alguns minutos.</div>';
+  function opsResumo(ops = {}) {
+    return [
+      ops.trim ? `Corte ${ops.trim.start}–${ops.trim.end}s` : null,
+      ops.resize ? `Resize ${ops.resize}` : null,
+      ops.speed ? `${ops.speed}×` : null,
+      ops.removeSilence ? `Pausas removidas` : null,
+      ops.subtitles ? `Legendas` : null,
+      ops.subtitles_warning ? `⚠ legenda: ${ops.subtitles_warning}` : null,
+    ].filter(Boolean).join(' · ');
+  }
 
-      const sleep = ms => new Promise(r => setTimeout(r, ms));
-      const deadline = Date.now() + 10 * 60 * 1000; // teto de 10 min
-      let data = null;
-      while (!data) {
-        await sleep(3500);
-        if (Date.now() > deadline) throw new Error('A edição está demorando muito — tente um vídeo menor.');
-        let s;
-        try {
-          s = await api('GET', `/edit/status/${jobId}`);
-        } catch (e) {
-          if (/encontrada|expirada/i.test(e.message)) throw e; // job sumiu (ex.: restart do servidor)
-          continue; // erro transitório → tenta de novo no próximo ciclo
-        }
-        if (s.status === 'error') throw new Error(s.error || 'Falha na edição');
-        if (s.status === 'done') data = s;
+  function shortUrl(u) {
+    try { const p = new URL(u); return p.pathname.split('/').pop() || p.hostname; } catch { return u.slice(0, 40); }
+  }
+
+  // Poller único: consulta TODOS os jobs ativos num request em lote (evita
+  // estourar o rate-limit ao polar 5+ vídeos ao mesmo tempo).
+  async function startPoller() {
+    if (pollerOn) return;
+    pollerOn = true;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    while (rows.size) {
+      await sleep(3000);
+      const ids = [...rows.keys()];
+      let map;
+      try { map = await api('GET', `/edit/status-batch?ids=${ids.join(',')}`); }
+      catch { continue; }
+      for (const id of ids) {
+        const s = map[id]; const row = rows.get(id);
+        if (!s || !row) continue;
+        if (s.status === 'queued')          setRow(row, 'queued', s);
+        else if (s.status === 'processing') setRow(row, 'processing', s);
+        else if (s.status === 'error')      { setRow(row, 'error', s); rows.delete(id); }
+        else if (s.status === 'gone')       { setRow(row, 'error', { error: 'Job expirou (servidor reiniciou)' }); rows.delete(id); }
+        else if (s.status === 'done')       { setRow(row, 'done', s); rows.delete(id); }
       }
+    }
+    pollerOn = false;
+  }
 
-      // Ops aplicadas em formato legível
-      const ops = data.ops_applied || {};
-      const opsList = [
-        ops.trim    ? `Corte: ${ops.trim.start}s → ${ops.trim.end}s` : null,
-        ops.resize  ? `Resize: ${ops.resize}` : null,
-        ops.speed   ? `Velocidade: ${ops.speed}×` : null,
-        ops.mute    ? `Áudio removido` : ops.volume !== null ? `Volume: ${Math.round(ops.volume * 100)}%` : null,
-        ops.grayscale ? `Preto e branco` : null,
-        ops.removeSilence ? `Pausas removidas` : null,
-        ops.subtitles ? `Legendas (burned-in)` : null,
-        ops.subtitles_warning ? `Legendas não aplicadas: ${ops.subtitles_warning}` : null,
-      ].filter(Boolean);
+  function setRow(rowEl, status, data) {
+    const url = rowEl.dataset.url;
+    const body = rowEl.querySelector('.eq-body');
+    const badge = rowEl.querySelector('.eq-badge');
+    rowEl.className = `eq-row eq-${status}`;
+    if (status === 'queued') {
+      badge.textContent = data.position ? `na fila (${data.position}º)` : 'na fila';
+      body.innerHTML = '';
+    } else if (status === 'processing') {
+      badge.textContent = 'processando…';
+      body.innerHTML = '<div class="eq-bar"><div></div></div>';
+    } else if (status === 'error') {
+      badge.textContent = 'erro';
+      body.innerHTML = `<div style="color:#c0392b;font-size:.82rem">${safeHtml(data.error || 'Falha')}</div>`;
+    } else if (status === 'done') {
+      badge.textContent = 'pronto';
+      body.innerHTML = `
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:8px">${data.duration_original}s → ${data.duration_output}s · ${data.size_mb} MB · ${safeHtml(opsResumo(data.ops_applied))}</div>
+        <a href="${encodeURI(data.download_url)}" download class="btn btn-accent" style="padding:6px 14px;font-size:.85rem">Baixar MP4</a>`;
+    }
+  }
 
-      result.innerHTML = `
-        <div class="card">
-          <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:16px">Vídeo editado</h3>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
-              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.duration_original}s</div>
-              <div style="font-size:.75rem;color:var(--muted)">duração original</div>
-            </div>
-            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
-              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.duration_output}s</div>
-              <div style="font-size:.75rem;color:var(--muted)">duração final</div>
-            </div>
-            <div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center">
-              <div style="font-size:1.4rem;font-family:'Cormorant Garamond',serif">${data.size_mb} MB</div>
-              <div style="font-size:.75rem;color:var(--muted)">tamanho final</div>
-            </div>
+  el.querySelector('#edit-btn').addEventListener('click', async () => {
+    const urls = el.querySelector('#video-urls').value.split('\n').map(u => u.trim()).filter(Boolean);
+    const instructions = el.querySelector('#video-instructions').value.trim();
+    if (!urls.length) { toast('Cole pelo menos uma URL', 'error'); return; }
+
+    const btn = el.querySelector('#edit-btn');
+    btn.disabled = true; btn.textContent = 'Enfileirando…';
+    try {
+      const start = await api('POST', '/edit/video', { video_urls: urls, instructions });
+      const list = start.jobs || [{ job_id: start.job_id, video_url: urls[0] }];
+      toast(`${list.length} vídeo(s) na fila (processa ${start.concurrency || 2} por vez)`);
+
+      for (const j of list) {
+        seq++;
+        const row = document.createElement('div');
+        row.className = 'eq-row eq-queued';
+        row.dataset.url = j.video_url;
+        row.innerHTML = `
+          <div class="eq-head">
+            <span class="eq-name">#${seq} · ${safeHtml(shortUrl(j.video_url))}</span>
+            <span class="eq-badge">na fila</span>
           </div>
-          ${opsList.length ? `
-            <div style="margin-bottom:16px">
-              <p style="font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Operações aplicadas</p>
-              ${opsList.map(o=>`<div style="font-size:.88rem;padding:5px 0;border-bottom:1px solid var(--bege-dark)">${o}</div>`).join('')}
-            </div>
-          ` : ''}
-          <a href="${encodeURI(data.download_url)}" download class="btn btn-accent btn-full">Baixar vídeo editado (MP4)</a>
-        </div>
-      `;
-      toast('Vídeo editado com sucesso!');
+          <div class="eq-body"></div>`;
+        queueEl.prepend(row);
+        rows.set(j.job_id, row);
+      }
+      startPoller(); // um poller só, em lote
+      el.querySelector('#video-urls').value = '';
     } catch (err) {
-      result.innerHTML = `<div class="card" style="border-left:4px solid #c0392b"><p style="color:#c0392b">Erro: ${safeHtml(err.message)}</p></div>`;
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false; btn.textContent = 'Editar vídeo';
+      btn.disabled = false; btn.textContent = 'Adicionar à fila';
     }
   });
 }

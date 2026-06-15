@@ -35,44 +35,101 @@ function cleanJobs() {
   for (const [id, j] of jobs) if (j.createdAt < cutoff) jobs.delete(id);
 }
 
-// Limite de edições simultâneas por worker (ffmpeg satura CPU). Configurável.
+// ─── Fila de produção ──────────────────────────────────────────────────────
+// MAX_CONCURRENT rodando ao mesmo tempo; o resto espera em 'queued'. O worker
+// (pump) puxa da fila conforme libera slot. Não rejeita mais com 429.
 const MAX_CONCURRENT = +(process.env.VIDEO_MAX_CONCURRENT || 2);
+const MAX_BATCH = +(process.env.VIDEO_MAX_BATCH || 20);
 let activeJobs = 0;
+const pending = [];   // jobIds aguardando slot (FIFO)
 
-// POST /api/edit/video — inicia a edição em background e devolve um job_id na hora
-router.post('/video', (req, res) => {
-  const { video_url, instructions, card_id, config } = req.body;
-  if (!video_url) return fail(res, 'video_url obrigatório', 400);
-  if (activeJobs >= MAX_CONCURRENT)
-    return fail(res, 'Servidor processando outros vídeos no momento — tente em instantes', 429);
-  cleanJobs();
-
+function enqueueJob({ video_url, instructions, config, cardId }) {
   const jobId = randomUUID();
-  jobs.set(jobId, { status: 'processing', createdAt: Date.now() });
-  activeJobs++;
+  jobs.set(jobId, {
+    status: 'queued', createdAt: Date.now(),
+    input: { video_url, instructions: instructions || '', config: config || {}, cardId },
+  });
+  pending.push(jobId);
+  pump();
+  return jobId;
+}
 
-  // instructions é opcional: sem ela, roda o padrão (corte natural + legendas)
-  editVideo({ video_url, instructions: instructions || '', cardId: card_id || req.user.id, config: config || {} })
-    .then(result => {
-      jobs.set(jobId, {
-        status: 'done', createdAt: Date.now(),
-        result: {
-          duration_original: result.duration_original,
-          duration_output: result.duration_output,
-          size_mb: result.size_mb,
-          ops_applied: result.ops_applied,
-          enhance_report: result.enhance_report,
-          download_url: `/api/edit/download/${path.basename(result.sessionDir)}`,
-        },
-      });
-    })
-    .catch(e => {
-      console.error('[edit/video]', e.message);
-      jobs.set(jobId, { status: 'error', createdAt: Date.now(), error: e.message });
-    })
-    .finally(() => { activeJobs = Math.max(0, activeJobs - 1); });
+function pump() {
+  while (activeJobs < MAX_CONCURRENT && pending.length) {
+    const jobId = pending.shift();
+    const job = jobs.get(jobId);
+    if (!job || job.status !== 'queued') continue;
+    activeJobs++;
+    jobs.set(jobId, { ...job, status: 'processing', startedAt: Date.now() });
 
-  ok(res, { job_id: jobId, status: 'processing' });
+    editVideo(job.input)
+      .then(result => {
+        jobs.set(jobId, {
+          status: 'done', createdAt: job.createdAt,
+          result: {
+            duration_original: result.duration_original,
+            duration_output: result.duration_output,
+            size_mb: result.size_mb,
+            ops_applied: result.ops_applied,
+            enhance_report: result.enhance_report,
+            download_url: `/api/edit/download/${path.basename(result.sessionDir)}`,
+          },
+        });
+      })
+      .catch(e => {
+        console.error('[edit/video]', e.message);
+        jobs.set(jobId, { status: 'error', createdAt: job.createdAt, error: e.message });
+      })
+      .finally(() => { activeJobs = Math.max(0, activeJobs - 1); pump(); });
+  }
+}
+
+// posição na fila (1-based) p/ o front mostrar "2º na fila"
+function queuePosition(jobId) {
+  const i = pending.indexOf(jobId);
+  return i < 0 ? 0 : i + 1;
+}
+
+// POST /api/edit/video — enfileira 1 OU vários vídeos. Devolve job_id(s) na hora.
+// Body: { video_url } OU { video_urls: [...] } (+ instructions/config aplicados a todos)
+router.post('/video', (req, res) => {
+  cleanJobs();
+  const { video_url, video_urls, instructions, card_id, config } = req.body;
+
+  let urls = [];
+  if (Array.isArray(video_urls)) urls = video_urls;
+  else if (video_url) urls = [video_url];
+  urls = urls.map(u => String(u || '').trim()).filter(Boolean);
+
+  if (!urls.length) return fail(res, 'Envie video_url ou video_urls (lista)', 400);
+  if (urls.length > MAX_BATCH) return fail(res, `Máx ${MAX_BATCH} vídeos por vez`, 400);
+
+  const cardId = card_id || req.user.id;
+  const ids = urls.map(u => enqueueJob({ video_url: u, instructions, config, cardId }));
+
+  // resposta retrocompatível: job_id (1º) + jobs[] com url p/ a fila do front
+  ok(res, {
+    job_id: ids[0],
+    jobs: ids.map((id, i) => ({ job_id: id, video_url: urls[i] })),
+    queued: ids.length,
+    concurrency: MAX_CONCURRENT,
+  });
+});
+
+// GET /api/edit/status-batch?ids=a,b,c — status de vários jobs num request só
+// (evita estourar o rate-limit ao polar uma fila inteira).
+router.get('/status-batch', (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 50);
+  const out = {};
+  for (const id of ids) {
+    const j = jobs.get(id);
+    if (!j) { out[id] = { status: 'gone' }; continue; }
+    if (j.status === 'done')  out[id] = { status: 'done', ...j.result };
+    else if (j.status === 'error') out[id] = { status: 'error', error: j.error };
+    else if (j.status === 'queued') out[id] = { status: 'queued', position: queuePosition(id) };
+    else out[id] = { status: 'processing' };
+  }
+  ok(res, out);
 });
 
 // GET /api/edit/status/:jobId — progresso/resultado. Fora do prefixo /video de
@@ -80,8 +137,9 @@ router.post('/video', (req, res) => {
 router.get('/status/:jobId', (req, res) => {
   const j = jobs.get(req.params.jobId);
   if (!j) return fail(res, 'Edição não encontrada ou expirada', 404);
-  if (j.status === 'done') return ok(res, { status: 'done', ...j.result });
+  if (j.status === 'done')  return ok(res, { status: 'done', ...j.result });
   if (j.status === 'error') return ok(res, { status: 'error', error: j.error });
+  if (j.status === 'queued') return ok(res, { status: 'queued', position: queuePosition(req.params.jobId) });
   ok(res, { status: 'processing' });
 });
 
