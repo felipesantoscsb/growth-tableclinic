@@ -149,6 +149,8 @@ function parseCarouselJson(text) {
       signature: str(s.signature),  // assinatura (exibida menor, em itálico)
       photo: s.photo === true,
       bg: str(s.bg),
+      textColor: str(s.textColor || s.text_color || s.cor_texto),
+      accent: str(s.accent || s.cor_destaque),
     }))
     .filter(s => s.text);
   data.legenda = typeof data.legenda === 'string' ? data.legenda : '';
@@ -177,19 +179,29 @@ Regras:
    (será exibida menor e em itálico), nunca no "text".
 5. Respeite a quantidade de slides se pedida; senão use de 5 a 7.
 
+Você tem PODER TOTAL de personalização por slide. Honre EXATAMENTE pedidos como:
+"esse slide é o headline", "muda a cor desse pra preto", "fundo terracota no
+último", "põe minha assinatura aqui", "texto branco", "esse é o slide de virada".
+Quando o usuário define cor/papel/título/assinatura de um slide, isso SOBRESCREVE
+o padrão da marca (não force capa-verde / cta-terracota se ele pediu outra coisa).
+
 Responda SOMENTE com JSON válido, sem nada antes ou depois:
 {
   "slides": [
-    { "role": "hook|content|cta", "title": null, "text": "texto que aparece no slide", "signature": null, "photo": false, "bg": null }
+    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null, "textColor": null, "accent": null }
   ],
   "legenda": "legenda do post com 3-5 parágrafos + hashtags"
 }
-Campos (title/signature/bg são null por padrão — só preencha se o briefing pedir):
-- role: "hook" no primeiro, "cta" no último, "content" no meio (controla só o estilo).
-- title: título do slide, apenas se o usuário fornecer um.
-- signature: assinatura do slide, apenas se o usuário pedir.
-- photo: true só se o briefing pedir foto naquele slide.
-- bg: "verde" | "bege" | "terracota" se o usuário pedir cor; senão null.`;
+Campos (null por padrão — preencha quando o usuário pedir):
+- role: papel do slide ("hook" capa, "cta" final, "content" miolo) — controla o estilo padrão.
+- title: headline/título do slide (quando o usuário marca "isso é headline").
+- signature: assinatura (ex.: "Evelyn Liu — Nutricionista"), exibida menor/itálico.
+- photo: true se pedir foto naquele slide.
+- bg: cor de fundo. Aceita nomes PT (verde, bege, creme, terracota, preto, branco,
+  cinza, dourado, rosa, azul, vermelho, oliva, marrom) OU hex (#1A1A1A). Use por
+  slide conforme o pedido; senão null (cai no padrão da marca).
+- textColor: cor do texto, se o usuário pedir (nome PT ou hex); senão null (contraste automático).
+- accent: cor de destaque (linha/realce), se pedida; senão null.`;
 
   const text = await streamText({
     model: MODEL,
@@ -220,14 +232,19 @@ Sua tarefa é INTERPRETAR (não executar ao pé da letra):
    (exibida menor e em itálico), nunca no "text".
 5. Instruções de foto/cor vão em "photo"/"bg".
 
+Honre pedidos de personalização por slide (cor de fundo, headline/título, assinatura,
+foto, cor de texto) — sobrescrevem o padrão da marca quando o usuário especifica.
+
 Responda SOMENTE com JSON válido, sem nada antes ou depois:
 {
   "slides": [
-    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null }
+    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null, "textColor": null, "accent": null }
   ],
   "legenda": null
 }
-role: "hook" no primeiro, "cta" no último, "content" no meio. title/signature/bg null por padrão.`;
+role: "hook" primeiro, "cta" último, "content" meio. bg aceita nome PT (verde/bege/
+terracota/preto/branco/cinza/dourado/rosa/azul/vermelho/oliva/marrom) ou hex.
+title/signature/bg/textColor/accent = null por padrão (preencha só se o usuário pedir).`;
 
   const text = await streamText({
     model: MODEL,

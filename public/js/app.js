@@ -94,10 +94,11 @@ function logout() {
 }
 
 // ── Role helpers ───────────────────────────────────────
+// 'calendario' ocultado (fora de uso). Mantido em pages{} caso volte.
 const ROLE_MENUS = {
-  admin:  ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial','admin'],
-  evelyn: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
-  editor: ['calendario','gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
+  admin:  ['gerador','anuncios','repurposing','edicao','mercado','insights','editorial','admin'],
+  evelyn: ['gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
+  editor: ['gerador','anuncios','repurposing','edicao','mercado','insights','editorial'],
   nutri:  ['gerador','repurposing','edicao'],
 };
 

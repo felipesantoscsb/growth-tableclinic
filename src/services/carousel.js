@@ -8,13 +8,55 @@ const { downloadFolderImages } = require('./driveDownloader');
 const TMP_DIR = path.join(__dirname, '../../tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// Paleta e tipografia TableClinic
+// Paleta e tipografia TableClinic. Marca = verde/bege/terracota; demais cores
+// liberadas para personalização por slide (o usuário pode pedir qualquer uma,
+// ou um hex). Sinônimos PT mapeados.
 const THEME = {
   verde:     '#3D4A35',
   bege:      '#F8F4EE',
+  creme:     '#F8F4EE',
   terracota: '#B97040',
+  terracotta:'#B97040',
   branco:    '#FFFFFF',
+  white:     '#FFFFFF',
+  preto:     '#1A1A1A',
+  black:     '#1A1A1A',
+  cinza:     '#6B6B6B',
+  grafite:   '#2A2A2A',
+  dourado:   '#C9A24B',
+  ouro:      '#C9A24B',
+  rosa:      '#D98C9A',
+  'rosa-claro':'#F3D9DE',
+  azul:      '#3A5A78',
+  'azul-claro':'#AEC6D9',
+  vermelho:  '#9E3B32',
+  oliva:     '#6B7150',
+  marrom:    '#5A4632',
 };
+
+// Cor de texto que contrasta com o fundo (luminância). Garante legibilidade em
+// QUALQUER cor de fundo (clara → texto verde escuro; escura → bege).
+function hexLum(hex) {
+  const h = String(hex || '').replace('#', '');
+  if (h.length < 6) return 1;
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrastText(bg) {
+  return hexLum(bg) > 0.55 ? '#3D4A35' : '#F8F4EE';
+}
+function contrastAccent(bg) {
+  return hexLum(bg) > 0.55 ? '#B97040' : '#F8F4EE';
+}
+function resolveColor(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.trim().toLowerCase();
+  if (THEME[t]) return THEME[t];
+  if (/^#[0-9a-f]{3,6}$/i.test(v.trim())) return v.trim();
+  return null;
+}
 
 // Cabeçalho de slide tolerante: aceita markdown (#, *, >, -), rótulos variados e
 // qualificadores como "(HOOK)". Ex.: "SLIDE 1", "**SLIDE 2:**", "## Slide 3 (CTA)",
@@ -180,17 +222,19 @@ function slidesFromStructured(rawContent) {
       ? s.role : (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'content');
     const isHook = role === 'hook';
     const isCTA = role === 'cta';
-    // bg explícito (nome da marca ou hex) ou padrão por papel: capa=verde, cta=terracota, miolo=bege
-    const named = typeof s.bg === 'string' ? THEME[s.bg.toLowerCase()] : null;
-    const hex = typeof s.bg === 'string' && /^#[0-9a-fA-F]{3,6}$/.test(s.bg) ? s.bg : null;
-    const bg = named || hex || (isCTA ? THEME.terracota : isHook ? THEME.verde : THEME.bege);
+    // bg explícito (nome PT/marca/sinônimo ou hex) ou padrão por papel:
+    // capa=verde, cta=terracota, miolo=bege. Usuário pode sobrescrever qualquer um.
+    const bg = resolveColor(s.bg) || (isCTA ? THEME.terracota : isHook ? THEME.verde : THEME.bege);
+    // cor de texto: override do usuário (textColor/text_color/cor_texto) ou contraste auto
+    const textColor = resolveColor(s.textColor || s.text_color || s.cor_texto) || contrastText(bg);
     return {
       // sem rótulo automático — só o título que o usuário forneceu (se houver)
       label: typeof s.title === 'string' && s.title.trim() ? s.title.trim() : '',
       text: String(s.text || '').trim(),
       signature: typeof s.signature === 'string' && s.signature.trim() ? s.signature.trim() : '',
       bg,
-      textColor: bg === THEME.bege ? THEME.verde : THEME.bege,
+      textColor,
+      accent: resolveColor(s.accent || s.cor_destaque) || contrastAccent(bg),
       fontSize: isHook ? 52 : 40,
       isHook,
       isCTA,
@@ -203,10 +247,8 @@ function buildSlideHtml(slide, index, total, photoPath) {
   const photoB64 = photoPath && fs.existsSync(photoPath)
     ? `data:image/jpeg;base64,${fs.readFileSync(photoPath).toString('base64')}`
     : null;
-  // accent precisa contrastar com o fundo (nunca terracota sobre terracota no CTA)
-  const accent = slide.bg === THEME.bege ? THEME.verde
-    : slide.bg === THEME.terracota ? THEME.bege
-    : THEME.terracota;
+  // accent: override do slide (se veio do JSON) ou contraste por luminância
+  const accent = slide.accent || contrastAccent(slide.bg);
   const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const textLines = slide.text.split('\n').map(l => `<p>${esc(l)}</p>`).join('');
   const sigSize = Math.max(18, Math.round(Math.min(slide.fontSize, 60) * 0.5));
