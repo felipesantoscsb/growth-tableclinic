@@ -34,7 +34,10 @@ function getOpenAI() {
   return _openai;
 }
 
-const TMP_DIR = path.join(__dirname, '../../tmp');
+// Base de tmp. Se VIDEO_TMP_DIR (ou volume do Railway) estiver setado, os
+// arquivos sobrevivem a restart/deploy. Sem env → comportamento atual.
+const TMP_DIR = process.env.VIDEO_TMP_DIR
+  || (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'video-tmp') : path.join(__dirname, '../../tmp'));
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const MAX_BYTES = 500 * 1024 * 1024; // 500 MB
@@ -828,4 +831,4 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
   };
 }
 
-module.exports = { editVideo };
+module.exports = { editVideo, TMP_DIR };

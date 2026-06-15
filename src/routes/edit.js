@@ -4,16 +4,16 @@ const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { authMiddleware } = require('../middleware/auth');
 const { ok, fail } = require('../middleware/respond');
-const { editVideo } = require('../services/videoEditor');
+const { editVideo, TMP_DIR } = require('../services/videoEditor');
 
 // GET /api/edit/download/:sessionId — serve o vídeo editado para download (sem auth — link temporário por sessionId)
 router.get('/download/:sessionId', (req, res) => {
   const sessionId = req.params.sessionId;
   if (!/^video_[\w-]+$/.test(sessionId)) return fail(res, 'ID inválido', 400);
 
-  const TMP_DIR = path.resolve(__dirname, '../../tmp');
-  const sessionDir = path.resolve(TMP_DIR, sessionId);
-  if (!sessionDir.startsWith(TMP_DIR + path.sep)) return fail(res, 'ID inválido', 400);
+  const baseDir = path.resolve(TMP_DIR);
+  const sessionDir = path.resolve(baseDir, sessionId);
+  if (!sessionDir.startsWith(baseDir + path.sep)) return fail(res, 'ID inválido', 400);
 
   const outputPath = path.join(sessionDir, 'output.mp4');
   if (!fs.existsSync(outputPath)) return fail(res, 'Arquivo não encontrado ou expirado', 404);
@@ -34,6 +34,28 @@ function cleanJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, j] of jobs) if (j.createdAt < cutoff) jobs.delete(id);
 }
+
+// TTL de retenção do vídeo pronto no disco. Default 30 min (garante os 15 min
+// pedidos com folga) e evita vazar disco. Configurável por VIDEO_OUTPUT_TTL_MIN.
+const OUTPUT_TTL_MS = (+(process.env.VIDEO_OUTPUT_TTL_MIN || 30)) * 60 * 1000;
+function cleanOldOutputs() {
+  try {
+    const base = path.resolve(TMP_DIR);
+    if (!fs.existsSync(base)) return;
+    const cutoff = Date.now() - OUTPUT_TTL_MS;
+    for (const name of fs.readdirSync(base)) {
+      if (!/^video_/.test(name)) continue;
+      const dir = path.join(base, name);
+      try {
+        const st = fs.statSync(dir);
+        if (st.isDirectory() && st.mtimeMs < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+    }
+  } catch (e) { console.error('[edit/cleanup]', e.message); }
+}
+// roda na carga e a cada 5 min
+cleanOldOutputs();
+setInterval(cleanOldOutputs, 5 * 60 * 1000).unref?.();
 
 // ─── Fila de produção ──────────────────────────────────────────────────────
 // MAX_CONCURRENT rodando ao mesmo tempo; o resto espera em 'queued'. O worker
