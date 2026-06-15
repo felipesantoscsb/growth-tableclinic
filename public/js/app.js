@@ -1041,8 +1041,17 @@ async function insights(el) {
     try {
       const d = await api('GET', `/insights/overview?days=${days}`);
       if (!d.total_posts) { box.innerHTML = '<p style="color:var(--muted)">Sem dados no período. Faça o upload do CSV acima.</p>'; return; }
-      const t = d.totais, m = d.medianas;
+      const t = d.totais, m = d.medianas, bm = d.benchmark || {};
       const stat = (label,val) => `<div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center;flex:1;min-width:90px"><div style="font-size:1.3rem;font-family:'Cormorant Garamond',serif">${val}</div><div style="font-size:.7rem;color:var(--muted)">${label}</div></div>`;
+      // stat com comparação ao benchmark do nicho
+      const benchBadge = b => {
+        if (!b || b.delta_pct === null) return '';
+        const cor = b.status === 'acima' ? 'var(--verde)' : b.status === 'abaixo' ? '#c0392b' : 'var(--muted)';
+        const seta = b.delta_pct > 0 ? '▲' : b.delta_pct < 0 ? '▼' : '•';
+        return `<div style="font-size:.72rem;color:${cor};font-weight:600;margin-top:3px">${seta} ${b.delta_pct>0?'+':''}${b.delta_pct}% vs ref</div>
+          <div style="font-size:.62rem;color:var(--muted)">ref ${(b.ref*100).toFixed(1)}%</div>`;
+      };
+      const statBench = (label,val,b) => `<div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center;flex:1;min-width:110px"><div style="font-size:1.3rem;font-family:'Cormorant Garamond',serif">${val}</div><div style="font-size:.7rem;color:var(--muted)">${label}</div>${benchBadge(b)}</div>`;
       const topRow = p => `<div style="display:flex;gap:10px;align-items:center;background:var(--bege);border-radius:8px;padding:10px">
         <div style="flex:1;min-width:0"><div style="font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${typeBadge(p.post_type)} · ${safeHtml(p.description||'(sem legenda)')}</div>
         <div style="font-size:.72rem;color:var(--muted)">${fmt(p.reach)} alcance · ${pct(p.taxa_engajamento)} eng · ${pct(p.taxa_salvamento)} salv · ${pct(p.taxa_seguidor)} seg</div></div>
@@ -1051,8 +1060,9 @@ async function insights(el) {
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           ${stat('posts', fmt(d.total_posts))}${stat('alcance', fmt(t.alcance))}${stat('salvamentos', fmt(t.salvamentos))}${stat('novos seguidores', fmt(t.seguidores))}${stat('comentários', fmt(t.comentarios))}
         </div>
+        <div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Taxas (mediana) vs benchmark do nicho — saúde/nutrição, conta ~130k</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-          ${stat('mediana eng.', pct(m.engajamento))}${stat('mediana salv.', pct(m.salvamento))}${stat('mediana seguidor', pct(m.seguidor))}${stat('mediana envio', pct(m.envio))}
+          ${statBench('engajamento', pct(m.engajamento), bm.engajamento)}${statBench('salvamento', pct(m.salvamento), bm.salvamento)}${statBench('seguidor', pct(m.seguidor), bm.seguidor)}${statBench('envio', pct(m.envio), bm.envio)}${statBench('comentário', pct(m.comentario), bm.comentario)}
         </div>
         ${d.por_tipo?.length?`<div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Por formato</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">${d.por_tipo.map(x=>`<div style="background:var(--bege);border-radius:8px;padding:8px 12px;font-size:.8rem"><strong>${typeBadge(x.tipo)}</strong> · ${x.posts} posts · eng ${pct(x.mediana_engajamento)} · salv ${pct(x.mediana_salvamento)}</div>`).join('')}</div>`:''}

@@ -39,6 +39,27 @@ router.post('/upload-csv', async (req, res) => {
   } catch (e) { console.error('[insights/upload-csv]', e.message); fail(res, e.message); }
 });
 
+// Benchmarks do nicho (saúde / nutrição comportamental, conta ~100-150k) —
+// TAXAS por alcance (mesma base das nossas medianas). Valores de referência de
+// mercado para contas grandes; sobrescrevíveis por env INSIGHTS_BENCH_*.
+const BENCHMARKS = {
+  engajamento: +(process.env.INSIGHTS_BENCH_ENGAJAMENTO || 0.040), // 4% eng/alcance
+  salvamento:  +(process.env.INSIGHTS_BENCH_SALVAMENTO  || 0.012), // 1.2% salv/alcance (alto no nicho educativo)
+  seguidor:    +(process.env.INSIGHTS_BENCH_SEGUIDOR    || 0.008), // 0.8% novos seguidores/alcance
+  envio:       +(process.env.INSIGHTS_BENCH_ENVIO       || 0.009), // 0.9% compart./alcance
+  comentario:  +(process.env.INSIGHTS_BENCH_COMENTARIO  || 0.003), // 0.3% coment./alcance
+};
+// compara valor realizado vs benchmark → { valor, ref, delta_pct, status }
+function vsBench(valor, ref) {
+  if (!ref) return { valor: r4(valor), ref, delta_pct: null, status: 'na' };
+  const delta = (valor - ref) / ref; // +0.25 = 25% acima
+  return {
+    valor: r4(valor), ref,
+    delta_pct: Math.round(delta * 100),
+    status: delta >= 0.05 ? 'acima' : delta <= -0.05 ? 'abaixo' : 'na_media',
+  };
+}
+
 function median(arr) {
   if (!arr.length) return 0;
   const s = [...arr].sort((a, b) => a - b); const m = Math.floor(s.length / 2);
@@ -103,6 +124,15 @@ router.get('/overview', async (req, res) => {
         seguidor: r4(median(withRates.map(p => p.taxa_seguidor))),
         salvamento: r4(median(withRates.map(p => p.taxa_salvamento))),
         engajamento: r4(median(withRates.map(p => p.taxa_engajamento))),
+        comentario: r4(median(withRates.map(p => p.taxa_comentario))),
+      },
+      // comparação com benchmark do nicho (saúde/nutrição, conta ~130k)
+      benchmark: {
+        engajamento: vsBench(median(withRates.map(p => p.taxa_engajamento)), BENCHMARKS.engajamento),
+        salvamento:  vsBench(median(withRates.map(p => p.taxa_salvamento)),  BENCHMARKS.salvamento),
+        seguidor:    vsBench(median(withRates.map(p => p.taxa_seguidor)),    BENCHMARKS.seguidor),
+        envio:       vsBench(median(withRates.map(p => p.taxa_envio)),       BENCHMARKS.envio),
+        comentario:  vsBench(median(withRates.map(p => p.taxa_comentario)),  BENCHMARKS.comentario),
       },
       por_tipo: tipos,
       top_engajamento: [...withRates].sort((a, b) => b.taxa_engajamento - a.taxa_engajamento).slice(0, 8).map(brief),
