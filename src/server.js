@@ -231,6 +231,27 @@ async function bootstrap() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS insights_posts (
+      id SERIAL PRIMARY KEY,
+      post_id VARCHAR(255) UNIQUE NOT NULL,
+      account_username VARCHAR(100),
+      description TEXT,
+      duration_s INT DEFAULT 0,
+      published_at TIMESTAMPTZ,
+      permalink TEXT,
+      post_type VARCHAR(50),
+      date DATE,
+      views INT DEFAULT 0,
+      reach INT DEFAULT 0,
+      likes INT DEFAULT 0,
+      shares INT DEFAULT 0,
+      follows INT DEFAULT 0,
+      comments INT DEFAULT 0,
+      saves INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log('[bootstrap] Migrations OK');
 

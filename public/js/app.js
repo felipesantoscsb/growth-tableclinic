@@ -998,95 +998,104 @@ async function insights(el) {
     <div class="page-header"><h1>Performance & Insights</h1></div>
 
     <div class="card" style="margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px">
-        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">Instagram — performance orgânica</h3>
-        <div style="display:flex;gap:6px;align-items:center">
-          <select id="ig-period" style="padding:8px;border:1.5px solid var(--bege-dark);border-radius:6px;font-family:Jost,sans-serif">
-            <option value="week">Última semana</option>
-            <option value="month" selected>Último mês</option>
-            <option value="year">Último ano</option>
-          </select>
-          <button class="btn btn-accent btn-sm" id="ig-analyze">Analisar com IA</button>
-        </div>
+      <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:6px">Importar histórico (CSV do Meta)</h3>
+      <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px">Suba o export do Meta Business Suite. Aqui o histórico é amplo (90 dias / 1 ano) — cada upload soma/atualiza por post (dedup automático).</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <label class="btn btn-outline" style="cursor:pointer">Escolher .csv<input type="file" id="ins-file" accept=".csv,text/csv" style="display:none"></label>
+        <span id="ins-fname" style="font-size:.82rem;color:var(--muted)"></span>
       </div>
-      <div id="ig-data"><div class="loading"><div class="spinner"></div> Carregando Instagram…</div></div>
+      <textarea id="ins-csv" class="ed-textarea" rows="4" placeholder="…ou cole o CSV aqui"></textarea>
+      <div style="margin-top:10px"><button class="btn btn-primary" id="ins-upload">Importar</button></div>
+      <div id="ins-upload-result" style="margin-top:10px"></div>
     </div>
 
-    <div id="ig-analysis" style="margin-bottom:16px"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+        <h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde)">Visão geral</h3>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="ins-period" class="input" style="width:150px">
+            <option value="30">Últimos 30 dias</option>
+            <option value="90" selected>Últimos 90 dias</option>
+            <option value="180">Últimos 6 meses</option>
+            <option value="365">Último ano</option>
+          </select>
+          <button class="btn btn-accent btn-sm" id="ins-analyze">Analisar com IA</button>
+        </div>
+      </div>
+      <div id="ins-overview"><div class="loading"><div class="spinner"></div> Carregando…</div></div>
+    </div>
+
+    <div id="ins-analysis" style="margin-bottom:16px"></div>
     <div id="insights-data"></div>
   `;
 
-  const igState = { period: 'month', data: null };
-  const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('pt-BR');
-  const typeBadge = t => ({ REELS:'Reel', VIDEO:'Vídeo', CAROUSEL_ALBUM:'Carrossel', IMAGE:'Imagem', FEED:'Feed', STORY:'Story' }[t] || t || 'Post');
+  const fmt = n => (n==null) ? '—' : Number(n).toLocaleString('pt-BR');
+  const pct = n => (n==null) ? '—' : (n*100).toFixed(2)+'%';
+  const typeBadge = t => ({ REELS:'Reel', VIDEO:'Vídeo', CAROUSEL_ALBUM:'Carrossel', IMAGE:'Imagem', FEED:'Feed', STORY:'Story', 'Reel do Instagram':'Reel', 'Carrossel do Instagram':'Carrossel', 'Imagem do Instagram':'Imagem' }[t] || t || 'Post');
+  let curDays = 90;
 
-  async function loadIG(period) {
-    igState.period = period;
-    const box = document.getElementById('ig-data');
-    box.innerHTML = '<div class="loading"><div class="spinner"></div> Carregando Instagram…</div>';
+  async function loadOverview(days) {
+    curDays = days;
+    const box = document.getElementById('ins-overview');
+    box.innerHTML = '<div class="loading"><div class="spinner"></div> Carregando…</div>';
     try {
-      const d = await api('GET', `/insights/instagram?period=${period}`);
-      igState.data = d;
-      if (!d.configured) { box.innerHTML = `<p style="color:var(--muted)">${safeHtml(d.message || 'Instagram não configurado.')}</p>`; return; }
-      if (d.error) { box.innerHTML = `<p style="color:#c0392b">Erro do Instagram: ${safeHtml(d.error)}</p>`; return; }
-      const a = d.account || {};
-      const t = d.totals || { posts:0, reach:0, interactions:0 };
-      const posts = d.posts || [];
-      const stat = (label, val) => `<div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center;min-width:90px;flex:1"><div style="font-size:1.3rem;font-family:'Cormorant Garamond',serif">${val}</div><div style="font-size:.7rem;color:var(--muted)">${label}</div></div>`;
+      const d = await api('GET', `/insights/overview?days=${days}`);
+      if (!d.total_posts) { box.innerHTML = '<p style="color:var(--muted)">Sem dados no período. Faça o upload do CSV acima.</p>'; return; }
+      const t = d.totais, m = d.medianas;
+      const stat = (label,val) => `<div style="background:var(--bege);border-radius:8px;padding:12px;text-align:center;flex:1;min-width:90px"><div style="font-size:1.3rem;font-family:'Cormorant Garamond',serif">${val}</div><div style="font-size:.7rem;color:var(--muted)">${label}</div></div>`;
+      const topRow = p => `<div style="display:flex;gap:10px;align-items:center;background:var(--bege);border-radius:8px;padding:10px">
+        <div style="flex:1;min-width:0"><div style="font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${typeBadge(p.post_type)} · ${safeHtml(p.description||'(sem legenda)')}</div>
+        <div style="font-size:.72rem;color:var(--muted)">${fmt(p.reach)} alcance · ${pct(p.taxa_engajamento)} eng · ${pct(p.taxa_salvamento)} salv · ${pct(p.taxa_seguidor)} seg</div></div>
+        ${p.permalink?`<a href="${p.permalink}" target="_blank" style="color:var(--terracota);font-size:.8rem">↗</a>`:''}</div>`;
       box.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-          ${a.avatar ? `<img src="${a.avatar}" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover">` : ''}
-          <div><strong>@${safeHtml(a.username || '—')}</strong><div style="font-size:.8rem;color:var(--muted)">${fmt(a.followers)} seguidores · ${fmt(a.mediaCount)} posts</div></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+          ${stat('posts', fmt(d.total_posts))}${stat('alcance', fmt(t.alcance))}${stat('salvamentos', fmt(t.salvamentos))}${stat('novos seguidores', fmt(t.seguidores))}${stat('comentários', fmt(t.comentarios))}
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-          ${stat('posts no período', fmt(t.posts))}
-          ${stat('alcance somado', fmt(t.reach))}
-          ${stat('interações', fmt(t.interactions))}
+          ${stat('mediana eng.', pct(m.engajamento))}${stat('mediana salv.', pct(m.salvamento))}${stat('mediana seguidor', pct(m.seguidor))}${stat('mediana envio', pct(m.envio))}
         </div>
-        ${posts.length ? `
-          <div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Top posts por engajamento</div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-            ${posts.slice(0,10).map(p=>`
-              <div style="display:flex;gap:10px;align-items:center;background:var(--bege);border-radius:8px;padding:10px">
-                ${p.thumbnail ? `<img src="${p.thumbnail}" alt="" style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${typeBadge(p.type)} · ${safeHtml(p.caption || '(sem legenda)')}</div>
-                  <div style="font-size:.72rem;color:var(--muted)">${fmt(p.likes)} curtidas · ${fmt(p.comments)} coment.${p.reach!==null?` · ${fmt(p.reach)} alcance`:''}${p.saved!==null?` · ${fmt(p.saved)} salvos`:''}${p.engagementRate!==null?` · ${p.engagementRate}% eng.`:''}</div>
-                </div>
-                ${p.permalink ? `<a href="${p.permalink}" target="_blank" style="color:var(--terracota);font-size:.8rem;flex-shrink:0">abrir ↗</a>` : ''}
-              </div>
-            `).join('')}
-          </div>
-        ` : '<p style="color:var(--muted)">Nenhum post no período selecionado.</p>'}
-      `;
-    } catch (e) {
-      box.innerHTML = `<p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p>`;
-    }
+        ${d.por_tipo?.length?`<div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Por formato</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">${d.por_tipo.map(x=>`<div style="background:var(--bege);border-radius:8px;padding:8px 12px;font-size:.8rem"><strong>${typeBadge(x.tipo)}</strong> · ${x.posts} posts · eng ${pct(x.mediana_engajamento)} · salv ${pct(x.mediana_salvamento)}</div>`).join('')}</div>`:''}
+        <div style="font-size:.72rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Top por engajamento</div>
+        <div style="display:flex;flex-direction:column;gap:8px">${(d.top_engajamento||[]).map(topRow).join('')}</div>`;
+    } catch (e) { box.innerHTML = `<p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p>`; }
   }
 
-  el.querySelector('#ig-period').addEventListener('change', e => loadIG(e.target.value));
-
-  el.querySelector('#ig-analyze').addEventListener('click', async () => {
-    const d = igState.data;
-    if (!d || !d.configured) { toast('Configure o Instagram primeiro', 'error'); return; }
-    if (!d.posts || !d.posts.length) { toast('Sem posts no período para analisar', 'error'); return; }
-    const btn = el.querySelector('#ig-analyze');
-    btn.disabled = true; btn.textContent = 'Analisando…';
-    const out = document.getElementById('ig-analysis');
-    out.innerHTML = '<div class="card"><div class="loading"><div class="spinner"></div> A IA está analisando a performance…</div></div>';
+  // upload CSV
+  el.querySelector('#ins-file').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    el.querySelector('#ins-fname').textContent = f.name;
+    el.querySelector('#ins-csv').value = await f.text();
+  });
+  el.querySelector('#ins-upload').addEventListener('click', async () => {
+    const csv = el.querySelector('#ins-csv').value.trim();
+    if (!csv) { toast('Cole ou selecione um CSV', 'error'); return; }
+    const btn = el.querySelector('#ins-upload'); btn.disabled = true; btn.textContent = 'Importando…';
+    const res = document.getElementById('ins-upload-result');
     try {
-      const r = await api('POST', '/insights/analyze', { period: d.period, account: d.account, posts: d.posts });
-      out.innerHTML = `<div class="card"><h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Análise da IA · ${igState.period === 'week' ? 'última semana' : igState.period === 'year' ? 'último ano' : 'último mês'}</h3><div class="ai-output">${safeHtml(r.analysis)}</div></div>`;
-      toast('Análise gerada!');
-    } catch (e) {
-      out.innerHTML = `<div class="card"><p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p></div>`;
-      toast(e.message, 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Analisar com IA';
-    }
+      const d = await api('POST', '/insights/upload-csv', { csv });
+      res.innerHTML = `<div class="ed-result-box ed-result-ok">${d.inserted} novos · ${d.updated} atualizados · ${d.total} no arquivo${d.warnings?.length?`<div class="ed-warnings">${d.warnings.slice(0,5).map(w=>`<div>⚠ ${safeHtml(w)}</div>`).join('')}</div>`:''}</div>`;
+      el.querySelector('#ins-csv').value=''; el.querySelector('#ins-fname').textContent='';
+      toast('Histórico importado!'); loadOverview(curDays);
+    } catch (e) { res.innerHTML = `<div class="ed-result-box ed-result-err">${safeHtml(e.message)}</div>`; toast(e.message,'error'); }
+    finally { btn.disabled=false; btn.textContent='Importar'; }
   });
 
-  loadIG('month');
+  el.querySelector('#ins-period').addEventListener('change', e => loadOverview(parseInt(e.target.value,10)));
+
+  el.querySelector('#ins-analyze').addEventListener('click', async () => {
+    const btn = el.querySelector('#ins-analyze'); btn.disabled=true; btn.textContent='Analisando…';
+    const out = document.getElementById('ins-analysis');
+    out.innerHTML = '<div class="card"><div class="loading"><div class="spinner"></div> A IA está analisando…</div></div>';
+    try {
+      const r = await api('POST', '/insights/analyze', { days: curDays });
+      out.innerHTML = `<div class="card"><h3 style="font-family:'Cormorant Garamond',serif;color:var(--verde);margin-bottom:12px">Análise da IA · ${curDays} dias</h3><div class="ai-output">${safeHtml(r.analysis)}</div></div>`;
+      toast('Análise gerada!');
+    } catch (e) { out.innerHTML = `<div class="card"><p style="color:#c0392b">Erro: ${safeHtml(e.message)}</p></div>`; toast(e.message,'error'); }
+    finally { btn.disabled=false; btn.textContent='Analisar com IA'; }
+  });
+
+  loadOverview(90);
 
   // Meta Ads — seção secundária (mantida)
   try {
@@ -1106,8 +1115,6 @@ async function insights(el) {
             `).join('')}
           </div>
         </div>`;
-    } else {
-      container.innerHTML = `<div class="card"><p style="color:var(--muted)">${safeHtml(data.message || 'Configure META_ADS_ACCESS_TOKEN para ver campanhas.')}</p></div>`;
     }
   } catch {}
 }
