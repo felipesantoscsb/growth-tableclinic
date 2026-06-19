@@ -612,9 +612,10 @@ async function listMiningItems({ type, status, editoria_provavel, hook_potencial
 
 // ── Phase 3 — Radar de Temas ────────────────────────────────────────────────
 
+const RADAR_YEAR = new Date().getFullYear();
 const RADAR_QUERIES_DEFAULT = [
-  'semaglutida tirzepatida Brasil notícias 2025',
-  'Anvisa medicamento emagrecimento aprovação 2025',
+  `semaglutida tirzepatida Brasil notícias ${RADAR_YEAR}`,
+  `Anvisa medicamento emagrecimento aprovação ${RADAR_YEAR}`,
   'Cimed Prati EMS genérico semaglutida lançamento Brasil',
   'pesquisa obesidade comportamento alimentar mulher Brasil',
   'dieta tendência celebridade semana Brasil',
@@ -694,21 +695,23 @@ async function runRadarQuery(query) {
   return rows[0];
 }
 
-// Roda todas as queries EM PARALELO (Promise.allSettled) — 5 web searches serial
-// estouravam o timeout do proxy. Cada query é independente; falha de uma não derruba as outras.
+// Roda em background, uma query por vez. O fluxo antigo disparava cinco buscas
+// simultâneas e frequentemente esbarrava no limite de concorrência da API.
+// Cada query continua independente: falha de uma não derruba as demais.
 async function runRadar(customQueries = null) {
   const queries = customQueries && Array.isArray(customQueries) && customQueries.length > 0
     ? customQueries
     : RADAR_QUERIES_DEFAULT;
 
-  const settled = await Promise.allSettled(queries.map(q => runRadarQuery(q)));
-
   const temas = [];
   const errors = [];
-  settled.forEach((r, i) => {
-    if (r.status === 'fulfilled') temas.push(r.value);
-    else errors.push({ query: queries[i], error: r.reason?.message || String(r.reason) });
-  });
+  for (const query of queries) {
+    try {
+      temas.push(await runRadarQuery(query));
+    } catch (err) {
+      errors.push({ query, error: err?.message || String(err) });
+    }
+  }
 
   return { temas, errors };
 }
@@ -722,13 +725,16 @@ const SLOTS_PADRAO = [
   { dia: 'DOM', editoria: 'historia_consultorio',  formato: 'reel_longo',   metrica_alvo: 'comentario' },
 ];
 
-async function gerarPauta(semanaId) {
+async function gerarPauta(semanaId, { forcar = false } = {}) {
   // Check existing
   const { rows: existing } = await db.query(
     `SELECT * FROM editorial_pautas WHERE semana_id = $1 ORDER BY created_at ASC`,
     [semanaId]
   );
-  if (existing.length > 0) return existing;
+  if (existing.length > 0 && !forcar) return existing;
+  if (existing.length > 0 && forcar) {
+    await db.query(`DELETE FROM editorial_pautas WHERE semana_id = $1`, [semanaId]);
+  }
 
   // Fetch context
   const [{ rows: temasAprovados }, { rows: reencarnacaoQueue }, { rows: miningHooks }, analytics] = await Promise.all([
@@ -764,7 +770,7 @@ async function gerarPauta(semanaId) {
   const pautas = [];
   for (const slot of slots.slice(0, 4)) {
     const { rows } = await db.query(
-      `INSERT INTO editorial_pautas (semana_id, dia, editoria, formato, frase_tese, metrica_alvo, fontes, status)
+      `INSERT INTO editorial_pautas (semana_id, slot_dia, editoria, formato, frase_tese, metrica_alvo, fontes, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,'proposto') RETURNING *`,
       [
         semanaId,
@@ -955,16 +961,33 @@ async function getSemanaStatus(semanaId) {
     [semanaId]
   );
 
+  const pautaIds = pautas.map(p => p.id);
+  let roteiros = [];
+  if (pautaIds.length > 0) {
+    const result = await db.query(
+      `SELECT * FROM editorial_roteiros
+       WHERE pauta_id = ANY($1::int[])
+       ORDER BY pauta_id, variacao ASC`,
+      [pautaIds]
+    );
+    roteiros = result.rows;
+  }
+  const roteirosPorPauta = {};
+  for (const roteiro of roteiros) {
+    if (!roteirosPorPauta[roteiro.pauta_id]) roteirosPorPauta[roteiro.pauta_id] = [];
+    roteirosPorPauta[roteiro.pauta_id].push(roteiro);
+  }
+
   // Streak: consecutive semanas with fase=5 going back
   const { rows: semanasBack } = await db.query(
-    `SELECT fase FROM editorial_semanas
+    `SELECT fase, estado FROM editorial_semanas
      WHERE semana_inicio <= $1
      ORDER BY semana_inicio DESC`,
     [semana.semana_inicio]
   );
   let streak = 0;
   for (const s of semanasBack) {
-    if (s.fase >= 5) streak++;
+    if (s.fase >= 5 && s.estado?.fase5?.leitura_feita === true) streak++;
     else break;
   }
 
@@ -973,17 +996,53 @@ async function getSemanaStatus(semanaId) {
     pauta_gerada:    pautas.length >= 4,
     roteiros_ok:     pautas.every(p => p.roteiros_count > 0),
     aprovado:        semana.fase >= 4,
-    publicado:       semana.fase >= 5,
+    publicado:       semana.estado?.fase5?.leitura_feita === true,
   };
 
-  return { semana, pautas, checklist, streak };
+  return {
+    semana,
+    pautas,
+    roteiros_por_pauta: roteirosPorPauta,
+    checklist,
+    streak,
+    placar: {
+      no_alvo: semana.placar_posts_no_alvo || 0,
+      total: semana.placar_posts_total || 0,
+    },
+  };
 }
 
 async function avancarFase(semanaId, dadosFase = {}) {
   const { rows } = await db.query(
     `UPDATE editorial_semanas
-     SET fase = fase + 1,
+     SET fase = LEAST(fase + 1, 5),
          estado = estado || $1::jsonb,
+         updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [JSON.stringify(dadosFase), semanaId]
+  );
+  if (rows.length === 0) throw new Error('Semana não encontrada');
+
+  if (dadosFase?.fase5?.leitura_feita === true) {
+    const noAlvo = Array.isArray(dadosFase.fase5.no_alvo) ? dadosFase.fase5.no_alvo.length : 0;
+    await db.query(
+      `UPDATE editorial_semanas
+       SET placar_posts_no_alvo = $1,
+           placar_posts_total = (SELECT COUNT(*) FROM editorial_pautas WHERE semana_id = $2),
+           updated_at = NOW()
+       WHERE id = $2`,
+      [noAlvo, semanaId]
+    );
+  }
+
+  return rows[0];
+}
+
+async function salvarEstadoSemana(semanaId, dadosFase = {}) {
+  const { rows } = await db.query(
+    `UPDATE editorial_semanas
+     SET estado = estado || $1::jsonb,
          updated_at = NOW()
      WHERE id = $2
      RETURNING *`,
@@ -1081,5 +1140,6 @@ module.exports = {
   getSemanaAtual,
   getSemanaStatus,
   avancarFase,
+  salvarEstadoSemana,
   seedEditorial,
 };

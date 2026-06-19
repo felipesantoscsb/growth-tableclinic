@@ -2070,7 +2070,14 @@ async function editorial(el) {
           <button id="sem-avancar-btn" class="btn btn-primary" style="margin-top:16px">Avançar para Leitura →</button>
         </div>`;
     } else if (fase === 5) {
-      faseContent = `
+      const leitura = semana?.estado?.fase5 || {};
+      const semanaFechada = leitura.leitura_feita === true;
+      faseContent = semanaFechada ? `
+        <div class="sem-fase-body">
+          <h4>Semana fechada ✓</h4>
+          <p class="ed-hint">Leitura registrada. A próxima semana será aberta automaticamente na segunda-feira.</p>
+          ${leitura.hipotese ? `<div class="ed-card" style="margin-top:12px"><strong>Hipótese:</strong> ${safeHtml(leitura.hipotese)}</div>` : ''}
+        </div>` : `
         <div class="sem-fase-body">
           <h4>Leitura da Semana</h4>
           <p class="ed-hint">Compare realizado vs meta. Declare reencarnações. Registre 1 hipótese.</p>
@@ -2081,17 +2088,17 @@ async function editorial(el) {
                 <div>
                   <div class="sem-slot-ed">${EDITORIA_LABEL[p.editoria]||p.editoria} · meta: <strong>${METRICA_LABEL[p.metrica_alvo]||p.metrica_alvo}</strong></div>
                   <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:.85rem">
-                    <input type="checkbox" class="leit-alvo-chk" data-pauta="${p.id}"> Atingiu a meta
+                    <input type="checkbox" class="leit-alvo-chk" data-pauta="${p.id}" ${(leitura.no_alvo||[]).includes(String(p.id)) ? 'checked' : ''}> Atingiu a meta
                   </label>
                   <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:.85rem">
-                    <input type="checkbox" class="leit-reenc-chk" data-pauta="${p.id}"> Reencarnar este post
+                    <input type="checkbox" class="leit-reenc-chk" data-pauta="${p.id}" ${(leitura.reencarnacoes||[]).includes(String(p.id)) ? 'checked' : ''}> Reencarnar este post
                   </label>
                 </div>
               </div>`).join('')}
           </div>
           <div style="margin-top:16px">
             <label class="ed-hint">Hipótese nova para próxima semana (máx 1):</label>
-            <textarea id="leit-hipotese" class="ed-textarea" rows="2" style="margin-top:6px">${safeHtml(semana?.estado?.fase5?.hipotese||'')}</textarea>
+            <textarea id="leit-hipotese" class="ed-textarea" rows="2" style="margin-top:6px">${safeHtml(leitura.hipotese||'')}</textarea>
           </div>
           <button id="sem-fechar-btn" class="btn btn-primary" style="margin-top:12px">Fechar semana ✓</button>
         </div>`;
@@ -2257,7 +2264,7 @@ async function editorial(el) {
     el.querySelectorAll('.grav-chk').forEach(chk => {
       chk.addEventListener('change', async () => {
         const gravados = [...el.querySelectorAll('.grav-chk:checked')].map(c => c.dataset.pauta);
-        try { await api('POST', '/editorial/semana/avancar', { dados: { fase4: { gravados } } }); }
+        try { await api('PATCH', '/editorial/semana/estado', { dados: { fase4: { gravados } } }); }
         catch (err) { toast(err.message, 'error'); }
       });
     });

@@ -252,6 +252,9 @@ async function bootstrap() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    ALTER TABLE editorial_roteiros
+      ADD COLUMN IF NOT EXISTS slides JSONB DEFAULT '[]';
   `);
   console.log('[bootstrap] Migrations OK');
 

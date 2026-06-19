@@ -24,6 +24,7 @@ const {
   getSemanaAtual,
   getSemanaStatus,
   avancarFase,
+  salvarEstadoSemana,
   seedEditorial,
 } = require('../services/editorialEngine');
 
@@ -398,6 +399,20 @@ router.post('/semana/avancar', requireRole('admin', 'evelyn', 'editor'), async (
   }
 });
 
+// ── PATCH /api/editorial/semana/estado ───────────────────────────────────
+// Salva checklist/progresso sem mudar de fase.
+router.patch('/semana/estado', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
+  try {
+    const semana = await getSemanaAtual();
+    const { dados } = req.body || {};
+    const updated = await salvarEstadoSemana(semana.id, dados || {});
+    ok(res, updated);
+  } catch (e) {
+    console.error('[editorial/semana/estado]', e.message);
+    fail(res, e.message);
+  }
+});
+
 // ══ PAUTA ═════════════════════════════════════════════════════════════════════
 
 // ── GET /api/editorial/pautas ────────────────────────────────────────────
@@ -420,9 +435,9 @@ router.get('/pautas', async (req, res) => {
 // ── POST /api/editorial/pautas/gerar ─────────────────────────────────────
 router.post('/pautas/gerar', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
   try {
-    const { semana_id } = req.body || {};
+    const { semana_id, forcar = false } = req.body || {};
     if (!semana_id) return fail(res, 'semana_id obrigatório', 400);
-    const pautas = await gerarPauta(semana_id);
+    const pautas = await gerarPauta(semana_id, { forcar: !!forcar });
     ok(res, pautas);
   } catch (e) {
     console.error('[editorial/pautas/gerar]', e.message);
@@ -523,7 +538,7 @@ router.get('/roteiros/:id/export', async (req, res) => {
   if (!Number.isFinite(id)) return fail(res, 'ID inválido', 400);
   try {
     const { rows } = await db.query(
-      `SELECT r.*, p.dia, p.editoria, p.formato FROM editorial_roteiros r
+      `SELECT r.*, p.slot_dia, p.editoria, p.formato FROM editorial_roteiros r
        JOIN editorial_pautas p ON p.id = r.pauta_id
        WHERE r.id = $1`,
       [id]
@@ -531,7 +546,7 @@ router.get('/roteiros/:id/export', async (req, res) => {
     if (rows.length === 0) return fail(res, 'Roteiro não encontrado', 404);
     const r = rows[0];
     const lines = [
-      `=== ROTEIRO ${r.variacao} — ${r.dia || ''} | ${r.editoria || ''} | ${r.formato || ''} ===`,
+      `=== ROTEIRO ${r.variacao} — ${r.slot_dia || ''} | ${r.editoria || ''} | ${r.formato || ''} ===`,
       '',
       `HOOK:\n${r.hook || ''}`,
       '',
