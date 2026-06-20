@@ -621,12 +621,65 @@ const RADAR_QUERIES_DEFAULT = [
   'dieta tendência celebridade semana Brasil',
 ];
 
-const RADAR_SYSTEM = `Você analisa temas para @nutrievelynliu, nutricionista comportamental (os 4 padrões, GLP-1, absolvição). Score de aderência = o tema permite à Evelyn dizer algo que SÓ a tese dela diz? Responda SOMENTE JSON: { tema, resumo, fonte_url, score_aderencia, score_justificativa, editoria_sugerida }`;
+const RADAR_SYSTEM = `Você analisa temas para @nutrievelynliu, nutricionista comportamental (os 4 padrões, GLP-1, absolvição). Score de aderência = o tema permite à Evelyn dizer algo que SÓ a tese dela diz?
+
+Responda SOMENTE com um objeto JSON, sem citações ou texto depois dele:
+{ "tema": "...", "resumo": "...", "fonte_url": "...", "score_aderencia": 0, "score_justificativa": "...", "editoria_sugerida": "..." }
+
+editoria_sugerida deve ser exatamente uma destas opções:
+canetas_noticia, tipologico_absolvicao, identidade, historia_consultorio, reflexao_collab, outro`;
 
 // Extrai texto de blocos type:'text' da resposta (ignora server_tool_use/results).
 function extractRadarText(msg) {
   if (!msg || !Array.isArray(msg.content)) return '';
   return msg.content.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+}
+
+// Extrai o primeiro objeto JSON completo, ignorando markdown, citações e texto
+// adicional que ferramentas de busca podem anexar depois da resposta.
+function parseFirstJsonObject(text) {
+  const clean = String(text || '').replace(/^```(?:json)?\s*/i, '').trim();
+  const start = clean.indexOf('{');
+  if (start < 0) throw new Error(`JSON inválido: ${clean.slice(0, 120)}`);
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < clean.length; i++) {
+    const char = clean[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0) return JSON.parse(clean.slice(start, i + 1));
+    }
+  }
+  throw new Error(`JSON incompleto: ${clean.slice(0, 120)}`);
+}
+
+function normalizeRadarEditoria(value) {
+  const normalized = String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (EDITORIAS.includes(normalized)) return normalized;
+  if (/caneta|medicamento|glp|noticia/.test(normalized)) return 'canetas_noticia';
+  if (/tipolog|absolv|padrao/.test(normalized)) return 'tipologico_absolvicao';
+  if (/identidade|pertencimento/.test(normalized)) return 'identidade';
+  if (/consultorio|paciente|historia/.test(normalized)) return 'historia_consultorio';
+  if (/reflex|collab|pessoal/.test(normalized)) return 'reflexao_collab';
+  return 'outro';
 }
 
 // Processa UMA query: web search (GA) → fallback conhecimento → parse → insert.
@@ -667,13 +720,11 @@ async function runRadarQuery(query) {
 
   if (!text) throw new Error(`sem texto na resposta${webErrMsg ? ` (web: ${webErrMsg})` : ''}`);
 
-  const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  let parsed;
-  try { parsed = JSON.parse(clean); }
-  catch { const m = clean.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error(`JSON inválido: ${clean.slice(0, 120)}`); }
+  const parsed = parseFirstJsonObject(text);
 
-  const score = Number(parsed.score_aderencia) || 0;
+  const score = Math.max(0, Math.min(10, Number(parsed.score_aderencia) || 0));
   const status = score <= 5 ? 'descartado' : 'pendente';
+  const editoria = normalizeRadarEditoria(parsed.editoria_sugerida);
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 14);
 
@@ -687,7 +738,7 @@ async function runRadarQuery(query) {
       parsed.fonte_url || null,
       score,
       parsed.score_justificativa || null,
-      parsed.editoria_sugerida || null,
+      editoria,
       status,
       expiresAt.toISOString(),
     ]
