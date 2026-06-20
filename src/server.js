@@ -255,6 +255,25 @@ async function bootstrap() {
 
     ALTER TABLE editorial_roteiros
       ADD COLUMN IF NOT EXISTS slides JSONB DEFAULT '[]';
+
+    CREATE TABLE IF NOT EXISTS app_migrations (
+      key TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM app_migrations
+        WHERE key = 'reset_editorial_week_2026_06_15'
+      ) THEN
+        DELETE FROM editorial_semanas
+        WHERE semana_inicio = DATE '2026-06-15';
+
+        INSERT INTO app_migrations (key)
+        VALUES ('reset_editorial_week_2026_06_15');
+      END IF;
+    END $$;
   `);
   console.log('[bootstrap] Migrations OK');
 
