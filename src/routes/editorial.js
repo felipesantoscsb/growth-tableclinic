@@ -25,6 +25,7 @@ const {
   getSemanaStatus,
   avancarFase,
   salvarEstadoSemana,
+  resetSemana,
   seedEditorial,
 } = require('../services/editorialEngine');
 
@@ -409,6 +410,19 @@ router.patch('/semana/estado', requireRole('admin', 'evelyn', 'editor'), async (
     ok(res, updated);
   } catch (e) {
     console.error('[editorial/semana/estado]', e.message);
+    fail(res, e.message);
+  }
+});
+
+// ── DELETE /api/editorial/semana ─────────────────────────────────────────
+// Reseta a semana atual. Pautas e roteiros são apagados em cascata.
+router.delete('/semana', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
+  try {
+    const semana = await getSemanaAtual();
+    const deleted = await resetSemana(semana.id);
+    ok(res, { reset: true, semana: deleted });
+  } catch (e) {
+    console.error('[editorial/semana DELETE]', e.message);
     fail(res, e.message);
   }
 });

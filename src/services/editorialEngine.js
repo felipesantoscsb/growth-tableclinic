@@ -1103,6 +1103,17 @@ async function salvarEstadoSemana(semanaId, dadosFase = {}) {
   return rows[0];
 }
 
+async function resetSemana(semanaId) {
+  const { rows } = await db.query(
+    `DELETE FROM editorial_semanas
+     WHERE id = $1
+     RETURNING id, semana_inicio, semana_fim`,
+    [semanaId]
+  );
+  if (rows.length === 0) throw new Error('Semana não encontrada');
+  return rows[0];
+}
+
 // ── Phase 6 — Seed ───────────────────────────────────────────────────────────
 
 async function seedEditorial() {
@@ -1192,5 +1203,6 @@ module.exports = {
   getSemanaStatus,
   avancarFase,
   salvarEstadoSemana,
+  resetSemana,
   seedEditorial,
 };

@@ -2111,7 +2111,10 @@ async function editorial(el) {
             <h3 class="ed-section-title">Semana ${ini} – ${fim}</h3>
             <div style="display:flex;gap:10px;margin-top:4px">${streakHtml}${placarHtml}</div>
           </div>
-          <button id="sem-seed-btn" class="btn btn-outline" style="font-size:.78rem;padding:4px 10px" title="Popular com dados de exemplo">Seed exemplo</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="sem-reset-btn" class="btn btn-outline" style="font-size:.78rem;padding:4px 10px;color:#a33;border-color:#a33" title="Limpar somente esta semana">Resetar semana</button>
+            <button id="sem-seed-btn" class="btn btn-outline" style="font-size:.78rem;padding:4px 10px" title="Popular com dados de exemplo">Seed exemplo</button>
+          </div>
         </div>
 
         <div class="sem-progress-bar"><div style="width:${progPct}%;background:var(--verde);height:100%;border-radius:4px;transition:width .4s"></div></div>
@@ -2130,6 +2133,23 @@ async function editorial(el) {
       if (!confirm('Popular banco com dados de exemplo? Só insere se banco estiver vazio.')) return;
       try { const d = await api('POST', '/editorial/seed', {}); toast(d.seeded ? 'Seed feito!' : d.reason); }
       catch (err) { toast(err.message, 'error'); }
+    });
+
+    // Reset da semana atual
+    el.querySelector('#sem-reset-btn')?.addEventListener('click', async () => {
+      if (!confirm('Resetar esta semana? Pautas, roteiros, checklist e placar serão apagados. Radar e mineração serão preservados.')) return;
+      const btn = el.querySelector('#sem-reset-btn');
+      btn.disabled = true; btn.textContent = 'Resetando…';
+      try {
+        await api('DELETE', '/editorial/semana');
+        toast('Semana resetada!');
+        const fresh = await api('GET', '/editorial/semana');
+        el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+        bindSemana(fresh);
+      } catch (err) {
+        toast(err.message, 'error');
+        btn.disabled = false; btn.textContent = 'Resetar semana';
+      }
     });
 
     // Fase 1: checklist
