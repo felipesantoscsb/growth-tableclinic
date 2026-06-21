@@ -19,7 +19,9 @@ const {
   listMiningItems,
   runRadar,
   gerarPauta,
+  trocarTemaPauta,
   gerarRoteiros,
+  revisarRoteiro,
   validateRoteiro,
   getSemanaAtual,
   getSemanaStatus,
@@ -459,6 +461,21 @@ router.post('/pautas/gerar', requireRole('admin', 'evelyn', 'editor'), async (re
   }
 });
 
+// ── POST /api/editorial/pautas/:id/trocar-tema ───────────────────────────
+router.post('/pautas/:id/trocar-tema', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return fail(res, 'ID inválido', 400);
+  const orientacao = String(req.body?.orientacao || '').trim();
+  if (orientacao.length > 1000) return fail(res, 'Orientação muito longa (máx 1000 caracteres)', 400);
+  try {
+    const pauta = await trocarTemaPauta(id, orientacao);
+    ok(res, pauta);
+  } catch (e) {
+    console.error('[editorial/pautas/trocar-tema]', e.message);
+    fail(res, e.message);
+  }
+});
+
 // ── PATCH /api/editorial/pautas/:id ──────────────────────────────────────
 router.patch('/pautas/:id', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -495,6 +512,22 @@ router.post('/pautas/:id/roteiros', requireRole('admin', 'evelyn', 'editor'), as
     ok(res, roteiros);
   } catch (e) {
     console.error('[editorial/pautas/roteiros POST]', e.message);
+    fail(res, e.message);
+  }
+});
+
+// ── POST /api/editorial/roteiros/:id/revisar ─────────────────────────────
+router.post('/roteiros/:id/revisar', requireRole('admin', 'evelyn', 'editor'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return fail(res, 'ID inválido', 400);
+  const orientacao = String(req.body?.orientacao || '').trim();
+  if (!orientacao) return fail(res, 'Descreva o que deseja revisar no roteiro', 400);
+  if (orientacao.length > 1500) return fail(res, 'Orientação muito longa (máx 1500 caracteres)', 400);
+  try {
+    const roteiro = await revisarRoteiro(id, orientacao);
+    ok(res, roteiro);
+  } catch (e) {
+    console.error('[editorial/roteiros/revisar]', e.message);
     fail(res, e.message);
   }
 });

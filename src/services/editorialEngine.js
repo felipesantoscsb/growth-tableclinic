@@ -839,6 +839,102 @@ async function gerarPauta(semanaId, { forcar = false } = {}) {
   return pautas;
 }
 
+async function trocarTemaPauta(pautaId, orientacao = '') {
+  const { rows: pautas } = await db.query(
+    `SELECT p.*, COALESCE(
+       (SELECT json_agg(json_build_object(
+          'slot_dia', outras.slot_dia,
+          'editoria', outras.editoria,
+          'frase_tese', outras.frase_tese
+        ) ORDER BY outras.created_at)
+        FROM editorial_pautas outras
+        WHERE outras.semana_id = p.semana_id AND outras.id <> p.id),
+       '[]'::json
+     ) AS outras_pautas
+     FROM editorial_pautas p
+     WHERE p.id = $1`,
+    [pautaId]
+  );
+  if (pautas.length === 0) throw new Error('Pauta não encontrada');
+  const pauta = pautas[0];
+
+  const [{ rows: temas }, { rows: mining }] = await Promise.all([
+    db.query(
+      `SELECT tema, resumo, editoria_sugerida
+       FROM editorial_temas_radar
+       WHERE status = 'aprovado'
+       ORDER BY score_aderencia DESC, created_at DESC
+       LIMIT 15`
+    ),
+    db.query(
+      `SELECT content, tema, dor, editoria_provavel
+       FROM editorial_mining_items
+       WHERE status = 'novo'
+       ORDER BY hook_potencial DESC, created_at DESC
+       LIMIT 12`
+    ),
+  ]);
+
+  const contexto = {
+    slot_fixo: {
+      dia: pauta.slot_dia,
+      editoria: pauta.editoria,
+      formato: pauta.formato,
+      metrica_alvo: pauta.metrica_alvo,
+    },
+    tema_rejeitado: pauta.frase_tese,
+    outros_temas_da_semana: pauta.outras_pautas,
+    radar_aprovado: temas,
+    mineracao: mining,
+    orientacao_do_editor: orientacao || 'Busque um ângulo editorial completamente diferente.',
+  };
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1200,
+    system: `Você substitui UM tema da pauta de @nutrievelynliu.
+
+REGRAS:
+- Mantenha exatamente dia, editoria, formato e metrica_alvo do slot.
+- Troque o assunto central, não apenas palavras, hook ou tom.
+- A nova frase_tese não pode ser paráfrase do tema_rejeitado.
+- Evite também repetir os outros_temas_da_semana.
+- Siga a orientacao_do_editor.
+
+Responda SOMENTE JSON:
+{"frase_tese":"nova tese claramente diferente","fontes":[]}`,
+    messages: [{ role: 'user', content: JSON.stringify(contexto, null, 2) }],
+  });
+
+  const text = msg.content.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+  const alternativa = parseFirstJsonObject(text);
+  const novaTese = String(alternativa.frase_tese || '').trim();
+  if (!novaTese) throw new Error('A IA não retornou um novo tema válido');
+  const palavras = value => new Set(
+    String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .split(/[^a-z0-9]+/).filter(w => w.length >= 4)
+  );
+  const anterior = palavras(pauta.frase_tese);
+  const novo = palavras(novaTese);
+  const intersecao = [...novo].filter(w => anterior.has(w)).length;
+  const similaridade = intersecao / Math.max(1, Math.min(anterior.size, novo.size));
+  if (
+    novaTese.toLowerCase() === String(pauta.frase_tese || '').trim().toLowerCase()
+    || (anterior.size >= 3 && novo.size >= 3 && similaridade >= 0.7)
+  ) {
+    throw new Error('A IA repetiu o tema anterior. Tente novamente com uma orientação mais específica.');
+  }
+
+  const { rows } = await db.query(
+    `UPDATE editorial_pautas
+     SET frase_tese = $1, fontes = $2, status = 'proposto'
+     WHERE id = $3
+     RETURNING *`,
+    [novaTese, JSON.stringify(alternativa.fontes || []), pautaId]
+  );
+  return rows[0];
+}
+
 const ROTEIRO_SYSTEM = `Você é o roteirista de @nutrievelynliu, nutricionista comportamental.
 
 REGRAS ABSOLUTAS (RED FLAGS — presença = rejeitar):
@@ -922,6 +1018,83 @@ async function gerarRoteiros(pautaId) {
   }
 
   return roteiros;
+}
+
+async function revisarRoteiro(roteiroId, orientacao) {
+  const { rows } = await db.query(
+    `SELECT r.*, p.slot_dia, p.editoria, p.formato, p.frase_tese, p.metrica_alvo
+     FROM editorial_roteiros r
+     JOIN editorial_pautas p ON p.id = r.pauta_id
+     WHERE r.id = $1`,
+    [roteiroId]
+  );
+  if (rows.length === 0) throw new Error('Roteiro não encontrado');
+  const atual = rows[0];
+
+  const contexto = {
+    pauta_fixa: {
+      dia: atual.slot_dia,
+      editoria: atual.editoria,
+      formato: atual.formato,
+      frase_tese: atual.frase_tese,
+      metrica_alvo: atual.metrica_alvo,
+    },
+    roteiro_atual: {
+      hook: atual.hook,
+      tensao: atual.tensao,
+      virada: atual.virada,
+      frase_do_post: atual.frase_do_post,
+      absolvicao: atual.absolvicao,
+      fechamento: atual.fechamento,
+      slides: atual.slides,
+    },
+    orientacao_do_editor: orientacao,
+  };
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2200,
+    system: `Você revisa um roteiro de @nutrievelynliu, nutricionista comportamental.
+
+REGRAS ABSOLUTAS:
+- Preserve tema, editoria, formato e objetivo da pauta.
+- Revise somente o roteiro fornecido.
+- Siga prioritariamente a orientacao_do_editor.
+- Proibido: compulsão, transtorno, TCA, bulimia, anorexia, Xkg, antes/depois, calorias específicas.
+- Use ao menos um termo da voz da marca: raiz, padrão, os 4, emoção sem destino.
+- Mantenha um único CTA.
+
+Responda com UM objeto JSON, não um array:
+{"hook":"...","tensao":"...","virada":"...","frase_do_post":"...","absolvicao":"...","fechamento":"...","slides":[]}`,
+    messages: [{ role: 'user', content: JSON.stringify(contexto, null, 2) }],
+  });
+
+  const text = msg.content.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+  const revisado = parseFirstJsonObject(text);
+  const fullContent = JSON.stringify(revisado);
+  const flags = validateRoteiro(fullContent);
+
+  const { rows: updated } = await db.query(
+    `UPDATE editorial_roteiros
+     SET hook = $1, tensao = $2, virada = $3, frase_do_post = $4,
+         absolvicao = $5, fechamento = $6, slides = $7,
+         full_content = $8, flags = $9, status = 'rascunho', updated_at = NOW()
+     WHERE id = $10
+     RETURNING *`,
+    [
+      revisado.hook || null,
+      revisado.tensao || null,
+      revisado.virada || null,
+      revisado.frase_do_post || null,
+      revisado.absolvicao || null,
+      revisado.fechamento || null,
+      JSON.stringify(revisado.slides || []),
+      fullContent,
+      JSON.stringify(flags),
+      roteiroId,
+    ]
+  );
+  return { ...updated[0], flags };
 }
 
 function validateRoteiro(content) {
@@ -1197,7 +1370,9 @@ module.exports = {
   runRadar,
   SLOTS_PADRAO,
   gerarPauta,
+  trocarTemaPauta,
   gerarRoteiros,
+  revisarRoteiro,
   validateRoteiro,
   getSemanaAtual,
   getSemanaStatus,

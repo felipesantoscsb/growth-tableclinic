@@ -1982,10 +1982,9 @@ async function editorial(el) {
               <div class="sem-slot-meta">Meta: <strong>${METRICA_LABEL[p.metrica_alvo] || p.metrica_alvo}</strong> · ${p.formato || ''}</div>
             </div>
             <div class="sem-slot-actions">
-              ${p.status === 'proposto' ? `
-                <button class="btn btn-primary slt-aceitar" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">✓ Aceitar</button>
-                <button class="btn btn-outline slt-alternativa" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">↺ Alternativa</button>` : ''}
+              ${p.status === 'proposto' ? `<button class="btn btn-primary slt-aceitar" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">✓ Aceitar</button>` : ''}
               ${p.status === 'aceito' ? '<span style="color:var(--verde);font-size:.85rem">✓ Aceito</span>' : ''}
+              <button class="btn btn-outline slt-alternativa" data-id="${p.id}" style="padding:4px 10px;font-size:.8rem">↺ Revisar tema</button>
             </div>
           </div>`).join('');
 
@@ -2031,7 +2030,7 @@ async function editorial(el) {
                           <pre class="rot-full">${safeHtml(r.full_content||'')}</pre>
                         </details>
                         <div style="margin-top:8px;display:flex;gap:6px">
-                          <button class="btn btn-outline rot-edit-btn" data-id="${r.id}" style="padding:3px 10px;font-size:.78rem">Editar</button>
+                          <button class="btn btn-outline rot-revisar-btn" data-id="${r.id}" style="padding:3px 10px;font-size:.78rem">Revisar roteiro</button>
                           <button class="btn btn-outline rot-export-btn" data-id="${r.id}" style="padding:3px 10px;font-size:.78rem">↓ Exportar</button>
                         </div>
                       </div>`;
@@ -2213,15 +2212,32 @@ async function editorial(el) {
     });
     el.querySelectorAll('.slt-alternativa').forEach(btn => {
       btn.addEventListener('click', async () => {
-        btn.disabled = true; btn.textContent = '↺ Gerando…';
-        try {
-          // Re-gerar pauta completa; por ora remove todos e gera novo
-          await api('POST', '/editorial/pautas/gerar', { semana_id: semanaId, forcar: true });
-          toast('Nova sugestão gerada!');
-          const fresh = await api('GET', '/editorial/semana');
-          el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
-          bindSemana(fresh);
-        } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = '↺ Alternativa'; }
+        const overlay = openModal(`
+          <button class="modal-close">×</button>
+          <h2>Revisar tema</h2>
+          <p class="ed-hint" style="margin-bottom:12px">Este slot será substituído. Os demais temas da semana serão preservados.</p>
+          <div class="form-group">
+            <label>Que direção você quer para o novo tema? <span style="color:var(--muted)">(opcional)</span></label>
+            <textarea id="tema-orientacao" class="ed-textarea" rows="4" placeholder="Ex.: trazer algo mais atual do radar; evitar medicamentos; usar uma dor de consultório…"></textarea>
+          </div>
+          <button id="tema-confirmar" class="btn btn-primary btn-full">Gerar tema realmente diferente</button>
+        `);
+        overlay.querySelector('#tema-confirmar').addEventListener('click', async () => {
+          const submit = overlay.querySelector('#tema-confirmar');
+          const orientacao = overlay.querySelector('#tema-orientacao').value.trim();
+          submit.disabled = true; submit.textContent = 'Buscando novo tema…';
+          try {
+            await api('POST', `/editorial/pautas/${btn.dataset.id}/trocar-tema`, { orientacao });
+            overlay.remove();
+            toast('Tema substituído!');
+            const fresh = await api('GET', '/editorial/semana');
+            el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+            bindSemana(fresh);
+          } catch (err) {
+            toast(err.message, 'error');
+            submit.disabled = false; submit.textContent = 'Gerar tema realmente diferente';
+          }
+        });
       });
     });
 
@@ -2261,6 +2277,39 @@ async function editorial(el) {
         } catch (err) { toast(err.message, 'error'); sel.value = sel.dataset.prev || 'rascunho'; }
       });
       sel.dataset.prev = sel.value;
+    });
+
+    // Fase 3: revisar somente um roteiro, mantendo a pauta
+    el.querySelectorAll('.rot-revisar-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const overlay = openModal(`
+          <button class="modal-close">×</button>
+          <h2>Revisar roteiro</h2>
+          <p class="ed-hint" style="margin-bottom:12px">O tema, a editoria e a meta serão mantidos. Diga o que precisa mudar no texto.</p>
+          <div class="form-group">
+            <label>Orientação para a revisão</label>
+            <textarea id="rot-orientacao" class="ed-textarea" rows="5" placeholder="Ex.: hook mais direto; menos técnico; encurtar; trocar CTA; deixar mais provocativo…" required></textarea>
+          </div>
+          <button id="rot-confirmar" class="btn btn-primary btn-full">Revisar este roteiro</button>
+        `);
+        overlay.querySelector('#rot-confirmar').addEventListener('click', async () => {
+          const submit = overlay.querySelector('#rot-confirmar');
+          const orientacao = overlay.querySelector('#rot-orientacao').value.trim();
+          if (!orientacao) { toast('Descreva o que deseja revisar', 'error'); return; }
+          submit.disabled = true; submit.textContent = 'Revisando…';
+          try {
+            await api('POST', `/editorial/roteiros/${btn.dataset.id}/revisar`, { orientacao });
+            overlay.remove();
+            toast('Roteiro revisado!');
+            const fresh = await api('GET', '/editorial/semana');
+            el.querySelector('.ed-section').outerHTML = renderSemana(fresh);
+            bindSemana(fresh);
+          } catch (err) {
+            toast(err.message, 'error');
+            submit.disabled = false; submit.textContent = 'Revisar este roteiro';
+          }
+        });
+      });
     });
 
     // Fase 3: exportar roteiro
