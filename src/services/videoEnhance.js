@@ -123,15 +123,19 @@ function markSentenceEnds(words, segments, { gapEndS = 0.6 } = {}) {
     const next = ws[i + 1];
     if (next && (next.start - w.end) >= gapEndS) w.sentenceEnd = true; // pausa = fim de fala
   }
-  // segmentos com pontuação final → marca a palavra cujo fim cai no fim do segmento
+  // segmentos com pontuação final → marca a ÚLTIMA palavra que COMEÇA dentro do
+  // segmento. Comparar pelo start (não pelo end): o end da última palavra costuma
+  // ultrapassar o end do segmento (marcaria uma palavra antes), e a tolerância no
+  // end pegava a 1ª palavra curta da frase SEGUINTE (start ≈ segEnd) — ambos
+  // deslocavam a fronteira em ±1 palavra e a legenda "roubava" palavra do trecho
+  // vizinho.
   for (const s of (segments || [])) {
     const t = String(s.text || '').trim();
     if (!/[.!?…]$/.test(t)) continue;
     const segEnd = +s.end;
     if (!Number.isFinite(segEnd)) continue;
-    // última palavra com end <= segEnd + folga
     let idx = -1;
-    for (let i = 0; i < ws.length; i++) { if (ws[i].end <= segEnd + 0.15) idx = i; else break; }
+    for (let i = 0; i < ws.length; i++) { if (ws[i].start < segEnd - 0.02) idx = i; else break; }
     if (idx >= 0) ws[idx].sentenceEnd = true;
   }
   return ws;
@@ -510,14 +514,17 @@ function detectJumpCuts(duration, silenceIntervals, words, cfg = {}) {
   };
 }
 
-// Constrói o complexFilter do FFmpeg para concatenar os segmentos KEEP, com
-// micro-crossfade de áudio nas emendas (acrossfade) p/ evitar clique/estalo.
+// Constrói o complexFilter do FFmpeg para concatenar os segmentos KEEP.
+// Áudio: micro fade-in/out DENTRO de cada segmento + concat (evita clique/estalo
+// sem alterar a duração). NÃO usar acrossfade aqui: ele SOBREPÕE os segmentos e
+// encurta o áudio ~crossfadeMs por emenda, enquanto o vídeo (concat) mantém a
+// duração cheia — com dezenas de cortes o áudio dessincroniza progressivamente.
 // Recodifica (corte frame-accurate). Retorna { filter, maps } ou null.
 function buildKeepFilter(keep, cfg = {}) {
   const c = { ...DEFAULTS, ...cfg };
   if (!keep || keep.length === 0) return null;
   if (keep.length === 1) {
-    // 1 segmento → trim simples, sem concat/crossfade
+    // 1 segmento → trim simples, sem concat/fade
     const k = keep[0];
     return {
       filter: `[0:v]trim=${k.start}:${k.end},setpts=PTS-STARTPTS[vout];[0:a]atrim=${k.start}:${k.end},asetpts=PTS-STARTPTS[aout]`,
@@ -527,21 +534,20 @@ function buildKeepFilter(keep, cfg = {}) {
   const xfade = Math.max(0.003, c.crossfadeMs / 1000);
   const v = [], a = [];
   keep.forEach((k, i) => {
+    const len = k.end - k.start;
+    const fade = Math.min(xfade, Math.max(0.003, len / 4));
+    const fd = fade.toFixed(3);
+    const foSt = Math.max(0, len - fade).toFixed(3);
     v.push(`[0:v]trim=${k.start}:${k.end},setpts=PTS-STARTPTS[v${i}]`);
-    a.push(`[0:a]atrim=${k.start}:${k.end},asetpts=PTS-STARTPTS[a${i}]`);
+    a.push(`[0:a]atrim=${k.start}:${k.end},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${fd},afade=t=out:st=${foSt}:d=${fd}[a${i}]`);
   });
   // vídeo: concat direto (corte seco no vídeo é ok; o estalo é problema de áudio)
   const vConcatInputs = keep.map((_, i) => `[v${i}]`).join('');
   const vConcat = `${vConcatInputs}concat=n=${keep.length}:v=1:a=0[vout]`;
-  // áudio: acrossfade encadeado entre segmentos consecutivos
-  const aChain = [];
-  let prev = 'a0';
-  for (let i = 1; i < keep.length; i++) {
-    const out = i === keep.length - 1 ? 'aout' : `ax${i}`;
-    aChain.push(`[${prev}][a${i}]acrossfade=d=${xfade.toFixed(3)}:c1=tri:c2=tri[${out}]`);
-    prev = out;
-  }
-  const filter = [...v, ...a, vConcat, ...aChain].join(';');
+  // áudio: concat direto (mesma duração do vídeo; fades já suavizaram as bordas)
+  const aConcatInputs = keep.map((_, i) => `[a${i}]`).join('');
+  const aConcat = `${aConcatInputs}concat=n=${keep.length}:v=0:a=1[aout]`;
+  const filter = [...v, ...a, vConcat, aConcat].join(';');
   return { filter, maps: ['[vout]', '[aout]'] };
 }
 
@@ -628,7 +634,12 @@ function remapWordsThroughKeep(words, keep) {
         break;
       }
     }
-    if (newStart === null) continue; // palavra caiu num trecho cortado
+    if (newStart === null) {
+      // palavra caiu num trecho cortado; se era fim de frase, a fronteira passa
+      // p/ a última palavra mantida (senão duas frases se fundem numa legenda)
+      if (w.sentenceEnd && out.length) out[out.length - 1].sentenceEnd = true;
+      continue;
+    }
     const dur = Math.max(0.05, w.end - w.start);
     out.push({ text: w.text, start: +newStart.toFixed(3), end: +(newStart + dur).toFixed(3), sentenceEnd: !!w.sentenceEnd });
   }
