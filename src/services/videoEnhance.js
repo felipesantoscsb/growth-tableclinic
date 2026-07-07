@@ -24,7 +24,7 @@ const DEFAULTS = {
   maxWords: 6,                 // teto de palavras por bloco (legenda punchy)
   blockMinS: 1.0,
   blockMaxS: 5.0,
-  karaokeColor: '#FFD700',     // amarelo da palavra ativa
+  karaokeColor: '#FFEE00',     // amarelo da legenda (gold #FFD700 lia como laranja no vídeo)
   primaryColor: '#FFFFFF',     // texto base
   fontName: 'Liberation Sans',
   // Jump cut
