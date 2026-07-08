@@ -374,13 +374,16 @@ function buildAss(blocks, cfg = {}) {
   const H = c.videoH || 1920;
   const vertical = H >= W;
 
-  // Cor: amarela fixa (karaokeColor). Sem secondary/karaoke.
-  const yellow = hexToAss(c.karaokeColor);
+  const captionColor = hexToAss(c.captionColor || c.karaokeColor);
+  const hookColor = hexToAss(c.visualHookColor || '#FFFFFF');
 
   const fontSize = Math.round(H * (vertical ? 0.034 : 0.05));  // menor p/ não estourar a tela
+  const hookFontSize = Math.round(H * (vertical ? 0.038 : 0.055));
   const marginLR = Math.round(W * 0.10);                       // bloco central estreito (centralizado)
   const marginV  = Math.round(H * (vertical ? 0.18 : 0.08));   // sobe no vertical (acima dos botões do Reels)
+  const hookMarginV = Math.round(H * (vertical ? 0.29 : 0.19));
   const outline  = Math.max(2, Math.round(fontSize * 0.12));
+  const hookOutline = Math.max(2, Math.round(hookFontSize * 0.14));
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -391,19 +394,27 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,${c.fontName},${fontSize},${yellow},${yellow},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${outline},0,2,${marginLR},${marginLR},${marginV},1
+Style: Default,${c.fontName},${fontSize},${captionColor},${captionColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${outline},0,2,${marginLR},${marginLR},${marginV},1
+Style: Hook,${c.fontName},${hookFontSize},${hookColor},${hookColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${hookOutline},0,2,${marginLR},${marginLR},${hookMarginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 
   const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
 
-  const lines = blocks.map(b => {
+  const lines = [];
+  const hookText = String(c.visualHook || '').trim();
+  const lastEnd = blocks.reduce((max, b) => Math.max(max, Number(b.end) || 0), 0);
+  if (hookText && lastEnd > 0) {
+    lines.push(`Dialogue: 1,${assTime(0)},${assTime(lastEnd)},Hook,,0,0,0,,${escape(hookText)}`);
+  }
+
+  lines.push(...blocks.map(b => {
     // guarda final: nenhuma linha começa com pontuação
     const ls = (b.lines || [b.text]).map(l => stripLeadingPunct(l));
     const body = escape(ls.join('\\N'));
     return `Dialogue: 0,${assTime(b.start)},${assTime(b.end)},Default,,0,0,0,,${body}`;
-  });
+  }));
 
   return header + '\n' + lines.join('\n') + '\n';
 }

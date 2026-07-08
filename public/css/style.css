@@ -154,6 +154,62 @@ main#content {
 
 .form-group textarea { resize: vertical; min-height: 100px; }
 
+.flag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.flag-option,
+.segmented label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1.5px solid var(--bege-dark);
+  border-radius: 6px;
+  background: white;
+  color: var(--text);
+  font-size: .88rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, color .2s;
+}
+
+.flag-option input,
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.flag-option:has(input:checked),
+.segmented label:has(input:checked) {
+  border-color: var(--verde);
+  background: var(--verde);
+  color: var(--bege);
+}
+
+.flag-option.is-disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.segmented-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#visual-hook {
+  min-height: 78px;
+}
+
 /* ── Buttons ── */
 .btn {
   padding: 10px 20px;

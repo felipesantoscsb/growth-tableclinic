@@ -151,6 +151,7 @@ function parseInstructions(instructions, duration) {
     resize: null,
     subtitles: false,
     removeSilence: false,
+    trimEdgesOnly: false,
     speed: null,
     volume: null,
     mute: false,
@@ -181,9 +182,16 @@ function parseInstructions(instructions, duration) {
   else if (text.match(/1[:/]1|quadrad[oa]|square/)) ops.resize = '1:1';
   else if (text.match(/16[:/]9|horizontal|paisagem|widescreen/)) ops.resize = '16:9';
 
-  if (text.match(/legend[as]|caption|subtitle|srt/)) ops.subtitles = true;
+  if (text.match(/legend(?:a|as|e|ar|ado|ados)?|caption|subtitle|srt/)) ops.subtitles = true;
   // Remoção de pausas reage ao SUBSTANTIVO "silêncio(s)" (lacunas sem fala)
   if (text.match(/paus[as]|silencio|silence|cortar\s+paus/i)) ops.removeSilence = true;
+
+  // Modo controlado para reels gravados em takes: apara só o vazio antes da
+  // primeira fala e depois da última, sem cortar respiros no meio do roteiro.
+  if (text.match(/aparar\s+bordas|cortar\s+bordas|trim\s+edges|edge\s+trim|(?:so|somente|apenas).*(?:inicio|come[cç]o).*(?:fim|final)|(?:inicio|come[cç]o).*(?:fim|final).*(?:so|somente|apenas)/)) {
+    ops.trimEdgesOnly = true;
+    ops.removeSilence = false;
+  }
 
   // Opt-outs explícitos (cut e legenda são padrão, então é preciso poder desligar)
   if (text.match(/sem\s+legenda|nao\s+(?:quero\s+)?legenda|sem\s+caption/)) ops.subtitles = false;
@@ -216,6 +224,38 @@ function parseInstructions(instructions, duration) {
   return ops;
 }
 
+function parseEditFlags(flags = {}) {
+  const captionColor = String(flags.captionColor || 'yellow').toLowerCase() === 'white' ? 'white' : 'yellow';
+  const visualHook = String(flags.visualHook || '').trim().slice(0, 120);
+  const ops = {
+    trim: null,
+    resize: null,
+    subtitles: Boolean(flags.subtitles),
+    removeSilence: false,
+    trimEdgesOnly: Boolean(flags.trimEdgesOnly),
+    captionColor,
+    visualHook,
+    speed: null,
+    volume: null,
+    mute: false,
+    grayscale: false,
+  };
+
+  const pauseCut = String(flags.pauseCut || 'none').toLowerCase();
+  if (pauseCut === 'suave' || pauseCut === 'agressivo') {
+    ops.removeSilence = true;
+    ops.trimEdgesOnly = false;
+  }
+
+  const speed = Number(flags.speed);
+  if (speed === 1.1 || speed === 1.2) ops.speed = speed;
+
+  const resize = String(flags.resize || '').trim();
+  if (['9:16', '1:1', '16:9'].includes(resize)) ops.resize = resize;
+
+  return ops;
+}
+
 // Corte de pausas (Fase 1): só corta pausas LONGAS e deixa um respiro, em vez de
 // remover tudo pra zero (que gera jump cut e mata o ritmo da fala).
 const SILENCE_MIN_S = 1.2;  // (legado) usado só pelo fallback buildSilenceRemoveFilter
@@ -224,6 +264,7 @@ const KEEP_PAUSE_S = 0.4;   // ao cortar, mantém 400ms de pausa (não corta pra
 // o que cortar é o detectJumpCuts (minGap por nível de agressividade). dBFS configurável.
 const SILENCE_DETECT_S = +(process.env.SILENCE_DETECT_S || 0.25);
 const SILENCE_DETECT_DB = +(process.env.SILENCE_DBFS || -32);
+const EDGE_TRIM_PAD_S = +(process.env.EDGE_TRIM_PAD_S || 0.18);
 
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
@@ -246,6 +287,29 @@ function detectSilenceSegments(inputPath) {
       .on('error', reject)
       .run();
   });
+}
+
+function buildEdgeTrimFromWords(words, duration) {
+  const ws = (Array.isArray(words) ? words : [])
+    .filter(w => Number.isFinite(+w.start) && Number.isFinite(+w.end))
+    .sort((a, b) => a.start - b.start);
+  if (!ws.length) return null;
+
+  const start = Math.max(0, ws[0].start - EDGE_TRIM_PAD_S);
+  const end = Math.min(duration, ws[ws.length - 1].end + EDGE_TRIM_PAD_S);
+  if (end - start < 0.25) return null;
+  return { start: +start.toFixed(3), end: +end.toFixed(3) };
+}
+
+function remapWordsForTrim(words, trim) {
+  if (!trim || !Array.isArray(words) || !words.length) return words;
+  return words
+    .filter(w => w.end > trim.start && w.start < trim.end)
+    .map(w => ({
+      ...w,
+      start: Math.max(0, w.start - trim.start),
+      end: Math.max(0, w.end - trim.start),
+    }));
 }
 
 // Constrói filtro FFmpeg encurtando cada pausa longa para KEEP_PAUSE_S (deixando
@@ -615,7 +679,7 @@ function runComplexConcat(inputPath, filter, maps, outPath) {
   });
 }
 
-async function editVideo({ video_url, instructions, cardId, config = {} }) {
+async function editVideo({ video_url, instructions, edit_flags, cardId, config = {} }) {
   const sessionId = `video_${cardId || 'tmp'}_${Date.now()}`;
   const sessionDir = path.join(TMP_DIR, sessionId);
   fs.mkdirSync(sessionDir);
@@ -628,21 +692,29 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
 
   const originalDuration = await getVideoDuration(inputPath);
   let duration = originalDuration;
-  const ops = (instructions && instructions.trim())
-    ? parseInstructions(instructions, duration)
-    : { trim: null, resize: null, subtitles: true, removeSilence: true, speed: null, volume: null, mute: false, grayscale: false };
+  const hasFlags = edit_flags && typeof edit_flags === 'object' && !Array.isArray(edit_flags);
+  const ops = hasFlags
+    ? parseEditFlags(edit_flags)
+    : (instructions && instructions.trim())
+      ? parseInstructions(instructions, duration)
+      : { trim: null, resize: null, subtitles: true, removeSilence: true, trimEdgesOnly: false, speed: null, volume: null, mute: false, grayscale: false };
   const outputPath = path.join(sessionDir, 'output.mp4');
 
   // Config das camadas (env defaults sobrescrevíveis por chamada). Nível de
   // agressividade do jump cut vem da instrução, se presente.
   const text = (instructions || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
   let aggressiveness = process.env.JUMPCUT_AGGRESSIVENESS || 'medio';
-  if (/agressiv/.test(text)) aggressiveness = 'agressivo';
+  if (hasFlags && ['suave', 'agressivo'].includes(String(edit_flags.pauseCut || '').toLowerCase())) {
+    aggressiveness = String(edit_flags.pauseCut).toLowerCase();
+  } else if (/agressiv/.test(text)) aggressiveness = 'agressivo';
   else if (/suave|leve/.test(text)) aggressiveness = 'suave';
   const cfg = {
     aggressiveness,
     cpsMax: +(process.env.CAPTION_CPS_MAX || VE.DEFAULTS.cpsMax),
     karaokeColor: process.env.CAPTION_KARAOKE_COLOR || VE.DEFAULTS.karaokeColor,
+    captionColor: ops.captionColor === 'white' ? '#FFFFFF' : (process.env.CAPTION_KARAOKE_COLOR || VE.DEFAULTS.karaokeColor),
+    visualHook: ops.visualHook || '',
+    visualHookColor: '#FFFFFF',
     silenceDbfs: +(process.env.SILENCE_DBFS || VE.DEFAULTS.silenceDbfs),
     ...config,
   };
@@ -652,7 +724,7 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
   // ── Transcrição única do ORIGINAL (serve jump cut + legendas) ──────────────
   // best-effort: se falhar, segue sem words (camadas degradam).
   let words = [];
-  if ((ops.subtitles || ops.removeSilence) && !ops.mute) {
+  if ((ops.subtitles || ops.removeSilence || ops.trimEdgesOnly) && !ops.mute) {
     try {
       const tr = await transcribeWords(inputPath, sessionDir);
       words = tr.words;
@@ -660,6 +732,22 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
     } catch (e) {
       report.whisper = { error: e.message };
       report.fallbacks.push(`transcrição original falhou: ${e.message}`);
+    }
+  }
+
+  if (ops.trimEdgesOnly) {
+    const edgeTrim = buildEdgeTrimFromWords(words, duration);
+    if (edgeTrim) {
+      ops.trim = edgeTrim;
+      report.edgeTrim = {
+        applied: true,
+        start: edgeTrim.start,
+        end: edgeTrim.end,
+        removed_start_s: +edgeTrim.start.toFixed(2),
+        removed_end_s: +(duration - edgeTrim.end).toFixed(2),
+      };
+    } else {
+      report.edgeTrim = { applied: false, reason: 'sem palavras suficientes para detectar começo/fim da fala' };
     }
   }
 
@@ -707,6 +795,11 @@ async function editVideo({ video_url, instructions, cardId, config = {} }) {
   const deferMute = ops.mute && ops.subtitles;
   const mainOps = deferMute ? { ...ops, mute: false } : ops;
   await runMainPass(workingInput, mainOps, duration, mainOut);
+
+  // Trim faz a timeline do vídeo voltar para 0; ajusta as palavras antes de legendar.
+  if (ops.trim && words.length) {
+    words = remapWordsForTrim(words, ops.trim);
+  }
 
   // velocidade altera o tempo: escala as palavras p/ casar com o vídeo acelerado
   if (ops.speed && ops.speed !== 1.0 && words.length) {

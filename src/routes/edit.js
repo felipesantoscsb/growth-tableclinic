@@ -65,11 +65,11 @@ const MAX_BATCH = +(process.env.VIDEO_MAX_BATCH || 20);
 let activeJobs = 0;
 const pending = [];   // jobIds aguardando slot (FIFO)
 
-function enqueueJob({ video_url, instructions, config, cardId }) {
+function enqueueJob({ video_url, instructions, edit_flags, config, cardId }) {
   const jobId = randomUUID();
   jobs.set(jobId, {
     status: 'queued', createdAt: Date.now(),
-    input: { video_url, instructions: instructions || '', config: config || {}, cardId },
+    input: { video_url, instructions: instructions || '', edit_flags: edit_flags || null, config: config || {}, cardId },
   });
   pending.push(jobId);
   pump();
@@ -113,10 +113,10 @@ function queuePosition(jobId) {
 }
 
 // POST /api/edit/video — enfileira 1 OU vários vídeos. Devolve job_id(s) na hora.
-// Body: { video_url } OU { video_urls: [...] } (+ instructions/config aplicados a todos)
+// Body: { video_url } OU { video_urls: [...] } (+ instructions/edit_flags/config aplicados a todos)
 router.post('/video', (req, res) => {
   cleanJobs();
-  const { video_url, video_urls, instructions, card_id, config } = req.body;
+  const { video_url, video_urls, instructions, edit_flags, card_id, config } = req.body;
 
   let urls = [];
   if (Array.isArray(video_urls)) urls = video_urls;
@@ -127,7 +127,7 @@ router.post('/video', (req, res) => {
   if (urls.length > MAX_BATCH) return fail(res, `Máx ${MAX_BATCH} vídeos por vez`, 400);
 
   const cardId = card_id || req.user.id;
-  const ids = urls.map(u => enqueueJob({ video_url: u, instructions, config, cardId }));
+  const ids = urls.map(u => enqueueJob({ video_url: u, instructions, edit_flags, config, cardId }));
 
   // resposta retrocompatível: job_id (1º) + jobs[] com url p/ a fila do front
   ok(res, {

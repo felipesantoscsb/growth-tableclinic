@@ -811,9 +811,45 @@ async function edicao(el) {
           <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Cole vários links e deixe rolar — entram numa <strong>fila de produção</strong> e vão sendo entregues conforme ficam prontos.</p>
         </div>
         <div class="form-group">
-          <label>Instruções em linguagem natural <span style="color:var(--muted);font-weight:400">(opcional — aplicadas a todos)</span></label>
-          <textarea id="video-instructions" rows="4" placeholder="Ex: legendas, 9:16, cortar pausas agressivo, zoom"></textarea>
-          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Em branco já faz <strong>corte de pausas + legendas</strong> automaticamente.</p>
+          <label>Tratamento do vídeo <span style="color:var(--muted);font-weight:400">(aplicado a todos)</span></label>
+          <div class="flag-grid">
+            <label class="flag-option">
+              <input type="checkbox" id="flag-trim-edges" checked>
+              <span>Aparar bordas</span>
+            </label>
+            <label class="flag-option">
+              <input type="checkbox" id="flag-subtitles" checked>
+              <span>Legendar</span>
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Corte de pausas internas</label>
+          <div class="segmented">
+            <label><input type="radio" name="pause-cut" value="none" checked><span>Não cortar</span></label>
+            <label><input type="radio" name="pause-cut" value="suave"><span>Suave</span></label>
+            <label><input type="radio" name="pause-cut" value="agressivo"><span>Agressivo</span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Velocidade</label>
+          <div class="segmented">
+            <label><input type="radio" name="video-speed" value="1"><span>Normal</span></label>
+            <label><input type="radio" name="video-speed" value="1.1" checked><span>1.1x</span></label>
+            <label><input type="radio" name="video-speed" value="1.2"><span>1.2x</span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Cor da legenda</label>
+          <div class="segmented segmented-2">
+            <label><input type="radio" name="caption-color" value="yellow" checked><span>Amarela</span></label>
+            <label><input type="radio" name="caption-color" value="white"><span>Branca</span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Hook visual <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+          <textarea id="visual-hook" rows="3" maxlength="120" placeholder="Ex: Problema genérico&#10;não tem solução"></textarea>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Aparece centralizado acima da legenda. Use frases curtas, geralmente 2 a 3 linhas.</p>
         </div>
         <button class="btn btn-accent" id="edit-btn">Adicionar à fila</button>
       </div>
@@ -829,11 +865,13 @@ async function edicao(el) {
 
   function opsResumo(ops = {}) {
     return [
-      ops.trim ? `Corte ${ops.trim.start}–${ops.trim.end}s` : null,
+      ops.trimEdgesOnly ? `Bordas aparadas` : (ops.trim ? `Corte ${ops.trim.start}–${ops.trim.end}s` : null),
       ops.resize ? `Resize ${ops.resize}` : null,
       ops.speed ? `${ops.speed}×` : null,
       ops.removeSilence ? `Pausas removidas` : null,
       ops.subtitles ? `Legendas` : null,
+      ops.captionColor ? `Legenda ${ops.captionColor === 'white' ? 'branca' : 'amarela'}` : null,
+      ops.visualHook ? `Hook visual` : null,
       ops.subtitles_warning ? `⚠ legenda: ${ops.subtitles_warning}` : null,
     ].filter(Boolean).join(' · ');
   }
@@ -841,6 +879,35 @@ async function edicao(el) {
   function shortUrl(u) {
     try { const p = new URL(u); return p.pathname.split('/').pop() || p.hostname; } catch { return u.slice(0, 40); }
   }
+
+  function getEditFlags() {
+    const pauseCut = el.querySelector('input[name="pause-cut"]:checked')?.value || 'none';
+    const speedRaw = el.querySelector('input[name="video-speed"]:checked')?.value || '1';
+    const speed = Number(speedRaw);
+    return {
+      trimEdgesOnly: el.querySelector('#flag-trim-edges').checked && pauseCut === 'none',
+      pauseCut,
+      speed: speed === 1 ? null : speed,
+      subtitles: el.querySelector('#flag-subtitles').checked,
+      captionColor: el.querySelector('input[name="caption-color"]:checked')?.value || 'yellow',
+      visualHook: el.querySelector('#visual-hook').value.trim(),
+    };
+  }
+
+  function syncEdgeTrimAvailability() {
+    const pauseCut = el.querySelector('input[name="pause-cut"]:checked')?.value || 'none';
+    const edge = el.querySelector('#flag-trim-edges');
+    const edgeLabel = edge.closest('.flag-option');
+    const disabled = pauseCut !== 'none';
+    edge.disabled = disabled;
+    if (disabled) edge.checked = false;
+    edgeLabel.classList.toggle('is-disabled', disabled);
+  }
+
+  el.querySelectorAll('input[name="pause-cut"]').forEach(input => {
+    input.addEventListener('change', syncEdgeTrimAvailability);
+  });
+  syncEdgeTrimAvailability();
 
   // Poller único: consulta TODOS os jobs ativos num request em lote (evita
   // estourar o rate-limit ao polar 5+ vídeos ao mesmo tempo).
@@ -891,13 +958,13 @@ async function edicao(el) {
 
   el.querySelector('#edit-btn').addEventListener('click', async () => {
     const urls = el.querySelector('#video-urls').value.split('\n').map(u => u.trim()).filter(Boolean);
-    const instructions = el.querySelector('#video-instructions').value.trim();
+    const edit_flags = getEditFlags();
     if (!urls.length) { toast('Cole pelo menos uma URL', 'error'); return; }
 
     const btn = el.querySelector('#edit-btn');
     btn.disabled = true; btn.textContent = 'Enfileirando…';
     try {
-      const start = await api('POST', '/edit/video', { video_urls: urls, instructions });
+      const start = await api('POST', '/edit/video', { video_urls: urls, edit_flags });
       const list = start.jobs || [{ job_id: start.job_id, video_url: urls[0] }];
       toast(`${list.length} vídeo(s) na fila (processa ${start.concurrency || 2} por vez)`);
 
