@@ -406,7 +406,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
   const hookText = String(c.visualHook || '').trim();
   const lastEnd = blocks.reduce((max, b) => Math.max(max, Number(b.end) || 0), 0);
   if (hookText && lastEnd > 0) {
-    lines.push(`Dialogue: 1,${assTime(0)},${assTime(lastEnd)},Hook,,0,0,0,,${escape(hookText)}`);
+    const hookEnd = Math.min(lastEnd, Math.min(7, Math.max(3, Number(c.visualHookDurationS) || 5)));
+    lines.push(`Dialogue: 1,${assTime(0)},${assTime(hookEnd)},Hook,,0,0,0,,${escape(hookText)}`);
   }
 
   lines.push(...blocks.map(b => {

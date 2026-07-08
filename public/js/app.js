@@ -851,6 +851,16 @@ async function edicao(el) {
           <textarea id="visual-hook" rows="3" maxlength="120" placeholder="Ex: Problema genérico&#10;não tem solução"></textarea>
           <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Aparece centralizado acima da legenda. Use frases curtas, geralmente 2 a 3 linhas.</p>
         </div>
+        <div class="form-group">
+          <label>Duração do hook visual</label>
+          <div class="segmented segmented-5">
+            <label><input type="radio" name="hook-duration" value="3"><span>3s</span></label>
+            <label><input type="radio" name="hook-duration" value="4"><span>4s</span></label>
+            <label><input type="radio" name="hook-duration" value="5" checked><span>5s</span></label>
+            <label><input type="radio" name="hook-duration" value="6"><span>6s</span></label>
+            <label><input type="radio" name="hook-duration" value="7"><span>7s</span></label>
+          </div>
+        </div>
         <button class="btn btn-accent" id="edit-btn">Adicionar à fila</button>
       </div>
 
@@ -871,7 +881,7 @@ async function edicao(el) {
       ops.removeSilence ? `Pausas removidas` : null,
       ops.subtitles ? `Legendas` : null,
       ops.captionColor ? `Legenda ${ops.captionColor === 'white' ? 'branca' : 'amarela'}` : null,
-      ops.visualHook ? `Hook visual` : null,
+      ops.visualHook ? `Hook visual ${ops.visualHookDurationS || 5}s` : null,
       ops.subtitles_warning ? `⚠ legenda: ${ops.subtitles_warning}` : null,
     ].filter(Boolean).join(' · ');
   }
@@ -891,6 +901,7 @@ async function edicao(el) {
       subtitles: el.querySelector('#flag-subtitles').checked,
       captionColor: el.querySelector('input[name="caption-color"]:checked')?.value || 'yellow',
       visualHook: el.querySelector('#visual-hook').value.trim(),
+      visualHookDurationS: Number(el.querySelector('input[name="hook-duration"]:checked')?.value || 5),
     };
   }
 

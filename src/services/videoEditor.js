@@ -227,6 +227,7 @@ function parseInstructions(instructions, duration) {
 function parseEditFlags(flags = {}) {
   const captionColor = String(flags.captionColor || 'yellow').toLowerCase() === 'white' ? 'white' : 'yellow';
   const visualHook = String(flags.visualHook || '').trim().slice(0, 120);
+  const hookDuration = Math.min(7, Math.max(3, Number(flags.visualHookDurationS) || 5));
   const ops = {
     trim: null,
     resize: null,
@@ -235,6 +236,7 @@ function parseEditFlags(flags = {}) {
     trimEdgesOnly: Boolean(flags.trimEdgesOnly),
     captionColor,
     visualHook,
+    visualHookDurationS: hookDuration,
     speed: null,
     volume: null,
     mute: false,
@@ -714,6 +716,7 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
     karaokeColor: process.env.CAPTION_KARAOKE_COLOR || VE.DEFAULTS.karaokeColor,
     captionColor: ops.captionColor === 'white' ? '#FFFFFF' : (process.env.CAPTION_KARAOKE_COLOR || VE.DEFAULTS.karaokeColor),
     visualHook: ops.visualHook || '',
+    visualHookDurationS: ops.visualHookDurationS || 5,
     visualHookColor: '#FFFFFF',
     silenceDbfs: +(process.env.SILENCE_DBFS || VE.DEFAULTS.silenceDbfs),
     ...config,
