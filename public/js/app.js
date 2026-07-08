@@ -840,6 +840,16 @@ async function edicao(el) {
           </div>
         </div>
         <div class="form-group">
+          <label>Volume</label>
+          <div class="segmented segmented-5">
+            <label><input type="radio" name="video-volume" value="1" checked><span>100%</span></label>
+            <label><input type="radio" name="video-volume" value="1.1"><span>110%</span></label>
+            <label><input type="radio" name="video-volume" value="1.2"><span>120%</span></label>
+            <label><input type="radio" name="video-volume" value="1.3"><span>130%</span></label>
+            <label><input type="radio" name="video-volume" value="1.5"><span>150%</span></label>
+          </div>
+        </div>
+        <div class="form-group">
           <label>Cor da legenda</label>
           <div class="segmented segmented-2">
             <label><input type="radio" name="caption-color" value="yellow" checked><span>Amarela</span></label>
@@ -878,6 +888,7 @@ async function edicao(el) {
       ops.trimEdgesOnly ? `Bordas aparadas` : (ops.trim ? `Corte ${ops.trim.start}–${ops.trim.end}s` : null),
       ops.resize ? `Resize ${ops.resize}` : null,
       ops.speed ? `${ops.speed}×` : null,
+      ops.volume ? `Volume ${Math.round(ops.volume * 100)}%` : null,
       ops.removeSilence ? `Pausas removidas` : null,
       ops.subtitles ? `Legendas` : null,
       ops.captionColor ? `Legenda ${ops.captionColor === 'white' ? 'branca' : 'amarela'}` : null,
@@ -893,11 +904,14 @@ async function edicao(el) {
   function getEditFlags() {
     const pauseCut = el.querySelector('input[name="pause-cut"]:checked')?.value || 'none';
     const speedRaw = el.querySelector('input[name="video-speed"]:checked')?.value || '1';
+    const volumeRaw = el.querySelector('input[name="video-volume"]:checked')?.value || '1';
     const speed = Number(speedRaw);
+    const volume = Number(volumeRaw);
     return {
       trimEdgesOnly: el.querySelector('#flag-trim-edges').checked && pauseCut === 'none',
       pauseCut,
       speed: speed === 1 ? null : speed,
+      volume: volume === 1 ? null : volume,
       subtitles: el.querySelector('#flag-subtitles').checked,
       captionColor: el.querySelector('input[name="caption-color"]:checked')?.value || 'yellow',
       visualHook: el.querySelector('#visual-hook').value.trim(),

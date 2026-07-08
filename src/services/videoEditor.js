@@ -252,6 +252,9 @@ function parseEditFlags(flags = {}) {
   const speed = Number(flags.speed);
   if (speed === 1.1 || speed === 1.2) ops.speed = speed;
 
+  const volume = Number(flags.volume);
+  if ([1.1, 1.2, 1.3, 1.5].includes(volume)) ops.volume = volume;
+
   const resize = String(flags.resize || '').trim();
   if (['9:16', '1:1', '16:9'].includes(resize)) ops.resize = resize;
 
@@ -266,7 +269,7 @@ const KEEP_PAUSE_S = 0.4;   // ao cortar, mantém 400ms de pausa (não corta pra
 // o que cortar é o detectJumpCuts (minGap por nível de agressividade). dBFS configurável.
 const SILENCE_DETECT_S = +(process.env.SILENCE_DETECT_S || 0.25);
 const SILENCE_DETECT_DB = +(process.env.SILENCE_DBFS || -32);
-const EDGE_TRIM_PAD_S = +(process.env.EDGE_TRIM_PAD_S || 0.18);
+const EDGE_TRIM_PAD_S = +(process.env.EDGE_TRIM_PAD_S || 0.10);
 
 // Detecta segmentos de silêncio e retorna lista de intervalos com fala
 function detectSilenceSegments(inputPath) {
