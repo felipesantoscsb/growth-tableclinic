@@ -208,57 +208,128 @@ function parseSlides(rawContent) {
   return result;
 }
 
-// Converte o conteúdo estruturado (JSON da IA: {slides:[{role,text,photo,bg}]})
-// em slides de render. Retorna null se não for JSON estruturado — aí o caller
-// cai no parseSlides de texto (modo manual/colado e cards antigos).
+// ── Tamanho de fonte automático ──────────────────────────────────────────────
+// Em vez de 52/40 fixos: o tamanho acompanha o volume de texto, então um slide
+// só-headline sai grande e um slide denso não estoura a moldura.
+function fitHeadline(text) {
+  const len = String(text || '').length;
+  if (len <= 30) return 84;
+  if (len <= 60) return 72;
+  if (len <= 100) return 60;
+  return 50;
+}
+function fitBody(text, hasHeadline) {
+  const len = String(text || '').length;
+  const base = len <= 90 ? 54 : len <= 180 ? 46 : len <= 300 ? 40 : len <= 450 ? 34 : 30;
+  // com headline em cima, o corpo desce um degrau p/ hierarquia clara
+  return hasHeadline ? Math.max(28, base - 8) : base;
+}
+
+// Converte o conteúdo estruturado (JSON da IA) em slides de render.
+// Cada slide é uma COMPOSIÇÃO de blocos opcionais — kicker (rótulo pequeno),
+// headline (serifada grande), text (corpo), list (itens), quote (frase em
+// destaque), signature — em vez de um texto único num template fixo.
+// Retorna null se não for JSON estruturado — aí o caller cai no parseSlides.
 function slidesFromStructured(rawContent) {
   let data;
   try { data = JSON.parse(String(rawContent || '').trim()); } catch { return null; }
   if (!data || !Array.isArray(data.slides) || data.slides.length === 0) return null;
 
   const n = data.slides.length;
+  const str = v => (typeof v === 'string' && v.trim() ? v.trim() : '');
   return data.slides.map((s, i) => {
     const role = ['hook', 'content', 'cta'].includes(s.role)
       ? s.role : (i === 0 ? 'hook' : i === n - 1 ? 'cta' : 'content');
     const isHook = role === 'hook';
     const isCTA = role === 'cta';
-    // bg explícito (nome PT/marca/sinônimo ou hex) ou padrão por papel:
-    // capa=verde, cta=terracota, miolo=bege. Usuário pode sobrescrever qualquer um.
     const bg = resolveColor(s.bg) || (isCTA ? THEME.terracota : isHook ? THEME.verde : THEME.bege);
-    // cor de texto: override do usuário (textColor/text_color/cor_texto) ou contraste auto
     const textColor = resolveColor(s.textColor || s.text_color || s.cor_texto) || contrastText(bg);
+
+    // foto: legado `true` = fundo suave (18%); "forte" = foto cheia com overlay
+    const photoMode = s.photo === 'forte' ? 'forte'
+      : (s.photo === true || s.photo === 'fundo') ? 'fundo' : null;
+
+    const headline = str(s.headline);
+    const list = Array.isArray(s.list) ? s.list.map(x => String(x).trim()).filter(Boolean) : null;
     return {
-      // sem rótulo automático — só o título que o usuário forneceu (se houver)
-      label: typeof s.title === 'string' && s.title.trim() ? s.title.trim() : '',
+      // title legado vira kicker (rótulo pequeno acima do conteúdo)
+      kicker: str(s.kicker) || str(s.title),
+      headline,
       text: String(s.text || '').trim(),
-      signature: typeof s.signature === 'string' && s.signature.trim() ? s.signature.trim() : '',
+      list: list && list.length ? list : null,
+      quote: s.quote === true,
+      signature: str(s.signature),
+      align: ['center', 'left'].includes(s.align) ? s.align : (isHook ? 'center' : 'left'),
       bg,
       textColor,
       accent: resolveColor(s.accent || s.cor_destaque) || contrastAccent(bg),
-      fontSize: isHook ? 52 : 40,
+      fontSize: null, // automático por volume de texto (fitHeadline/fitBody)
       isHook,
       isCTA,
-      wantPhoto: s.photo === true,
+      photoMode,
+      wantPhoto: photoMode !== null,
     };
-  }).filter(s => s.text);
+  }).filter(s => s.text || s.headline || (s.list && s.list.length));
 }
 
 function buildSlideHtml(slide, index, total, photoPath) {
   const photoB64 = photoPath && fs.existsSync(photoPath)
     ? `data:image/jpeg;base64,${fs.readFileSync(photoPath).toString('base64')}`
     : null;
-  // accent: override do slide (se veio do JSON) ou contraste por luminância
   const accent = slide.accent || contrastAccent(slide.bg);
   const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const textLines = slide.text.split('\n').map(l => `<p>${esc(l)}</p>`).join('');
-  const sigSize = Math.max(18, Math.round(Math.min(slide.fontSize, 60) * 0.5));
+
+  // Retrocompat: slide legado (parseSlides) traz `label`+`fontSize`, sem blocos.
+  // Mapeia label→kicker e respeita o fontSize antigo como corpo.
+  const kicker = slide.kicker || slide.label || '';
+  const headline = slide.headline || '';
+  const body = String(slide.text || '').trim();
+  const list = Array.isArray(slide.list) && slide.list.length ? slide.list : null;
+  const isQuote = slide.quote === true;
+  const signature = slide.signature || '';
+  const align = slide.align || (slide.isHook ? 'center' : 'left');
+
+  // Tamanhos: automáticos por volume, ou o fontSize legado quando presente.
+  const legacy = typeof slide.fontSize === 'number' && slide.fontSize > 0;
+  const headSize = headline ? fitHeadline(headline) : 0;
+  const bodySize = legacy ? Math.min(slide.fontSize, 60) : fitBody(body, !!headline);
+  const quoteSize = fitHeadline(body) - 8;
+  const kickerSize = 26;
+  const sigSize = 30;
+
+  // Foto: 'forte' = cheia com scrim p/ o texto ler; 'fundo' = marca d'água 18%.
+  // Sem modo explícito mas com foto passada (caminho legado) → 'fundo'.
+  const photoMode = photoB64 ? (slide.photoMode === 'forte' ? 'forte' : 'fundo') : null;
+  const photoForte = photoMode === 'forte';
+  const photoFundo = photoMode === 'fundo';
+  // Em foto forte, o texto assenta numa faixa escura translúcida p/ contraste.
+  const onScrim = photoForte;
+  const bodyColor = onScrim ? '#F8F4EE' : slide.textColor;
+  const scrimAccent = onScrim ? '#F8F4EE' : accent;
+
+  const blocks = [];
+  blocks.push(`<div class="accent-bar"></div>`);
+  if (kicker) blocks.push(`<div class="kicker">${esc(kicker)}</div>`);
+  if (headline) blocks.push(`<div class="headline">${esc(headline)}</div>`);
+  if (isQuote && body) {
+    blocks.push(`<div class="quote">${esc(body).split('\n').join('<br>')}</div>`);
+  } else if (body) {
+    const paras = body.split('\n').map(l => l.trim()).filter(Boolean)
+      .map(l => `<p>${esc(l)}</p>`).join('');
+    blocks.push(`<div class="body">${paras}</div>`);
+  }
+  if (list) {
+    const items = list.map(it => `<li>${esc(it)}</li>`).join('');
+    blocks.push(`<ul class="list">${items}</ul>`);
+  }
+  if (signature) blocks.push(`<div class="signature">${esc(signature)}</div>`);
 
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400;1,600&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { width: 1080px; height: 1080px; overflow: hidden; }
@@ -266,81 +337,63 @@ function buildSlideHtml(slide, index, total, photoPath) {
     background: ${slide.bg};
     color: ${slide.textColor};
     font-family: 'Jost', sans-serif;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    padding: 80px;
-    position: relative;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: ${align === 'center' ? 'center' : 'flex-start'};
+    padding: 96px 88px; position: relative;
   }
-  ${photoB64 ? `
-  .photo-bg {
-    position: absolute; inset: 0;
-    background: url('${photoB64}') center/cover no-repeat;
-    opacity: 0.18;
-  }` : ''}
-  .corner-mark {
-    position: absolute;
-    top: 40px; left: 48px;
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 20px;
-    opacity: 0.5;
-    letter-spacing: 1px;
-  }
-  .slide-num {
-    position: absolute;
-    bottom: 40px; right: 48px;
-    font-size: 14px;
-    opacity: 0.45;
-    letter-spacing: 1px;
-    font-weight: 300;
-  }
-  .accent-bar {
-    width: 48px;
-    height: 3px;
-    background: ${accent};
-    margin-bottom: 36px;
-    ${slide.isHook ? 'margin: 0 auto 36px;' : ''}
-  }
+  ${photoFundo ? `.photo-bg { position:absolute; inset:0; background:url('${photoB64}') center/cover no-repeat; opacity:0.18; }` : ''}
+  ${photoForte ? `.photo-bg { position:absolute; inset:0; background:url('${photoB64}') center/cover no-repeat; }
+  .scrim { position:absolute; inset:0; background:linear-gradient(180deg, rgba(29,34,24,0.30) 0%, rgba(29,34,24,0.68) 100%); }` : ''}
+  .corner-mark { position:absolute; top:44px; left:52px; font-family:'Cormorant Garamond',serif; font-size:22px; letter-spacing:1px; opacity:0.55; color:${onScrim ? '#F8F4EE' : slide.textColor}; }
+  .slide-num { position:absolute; bottom:44px; right:52px; font-size:15px; letter-spacing:2px; font-weight:300; opacity:0.5; color:${onScrim ? '#F8F4EE' : slide.textColor}; }
   .content {
-    text-align: ${slide.isHook ? 'center' : 'left'};
-    max-width: 860px;
-    width: 100%;
+    position: relative; z-index: 2;
+    text-align: ${align}; max-width: 900px; width: 100%;
+    display: flex; flex-direction: column; gap: 26px;
+    align-items: ${align === 'center' ? 'center' : 'flex-start'};
   }
-  .label {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: ${Math.max(22, Math.round(Math.min(slide.fontSize, 60) * 0.6))}px;
-    font-weight: 600;
-    line-height: 1.2;
-    margin-bottom: 16px;
-    color: ${accent};
+  .accent-bar { width: 56px; height: 3px; background: ${scrimAccent}; }
+  .kicker {
+    font-family:'Jost',sans-serif; font-weight:600; font-size:${kickerSize}px;
+    letter-spacing:0.22em; text-transform:uppercase; color:${scrimAccent};
   }
-  .content p {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: ${Math.min(slide.fontSize, 60)}px;
-    line-height: 1.3;
-    font-weight: ${slide.isHook ? 600 : 400};
-    margin-bottom: 16px;
+  .headline {
+    font-family:'Cormorant Garamond',serif; font-weight:600;
+    font-size:${headSize}px; line-height:1.08; letter-spacing:-0.01em;
+    color:${onScrim ? '#F8F4EE' : slide.textColor}; text-wrap:balance;
   }
-  .content p:last-child { margin-bottom: 0; }
+  .body { display:flex; flex-direction:column; gap:14px; }
+  .body p {
+    font-family:'Jost',sans-serif; font-weight:400;
+    font-size:${bodySize}px; line-height:1.42; color:${bodyColor};
+  }
+  .quote {
+    font-family:'Cormorant Garamond',serif; font-style:italic; font-weight:600;
+    font-size:${quoteSize}px; line-height:1.2; color:${onScrim ? '#F8F4EE' : slide.textColor};
+    text-wrap:balance;
+  }
+  .list { list-style:none; display:flex; flex-direction:column; gap:18px; width:100%; }
+  .list li {
+    font-family:'Jost',sans-serif; font-weight:400; font-size:${Math.max(30, bodySize - 2)}px;
+    line-height:1.34; color:${bodyColor}; padding-left:40px; position:relative; text-align:left;
+  }
+  .list li::before {
+    content:''; position:absolute; left:0; top:0.62em;
+    width:18px; height:2px; background:${scrimAccent};
+  }
   .signature {
-    font-family: 'Cormorant Garamond', serif;
-    font-style: italic;
-    font-size: ${sigSize}px;
-    opacity: 0.78;
-    margin-top: 28px;
+    font-family:'Cormorant Garamond',serif; font-style:italic; font-size:${sigSize}px;
+    opacity:0.82; color:${onScrim ? '#F8F4EE' : slide.textColor}; margin-top:8px;
   }
 </style>
 </head>
 <body>
-  ${photoB64 ? '<div class="photo-bg"></div>' : ''}
+  ${photoFundo || photoForte ? '<div class="photo-bg"></div>' : ''}
+  ${photoForte ? '<div class="scrim"></div>' : ''}
   <div class="corner-mark">Table</div>
   <div class="slide-num">${index + 1} / ${total}</div>
-  <div class="accent-bar"></div>
   <div class="content">
-    ${slide.label ? `<div class="label">${esc(slide.label)}</div>` : ''}
-    ${textLines}
-    ${slide.signature ? `<div class="signature">${esc(slide.signature)}</div>` : ''}
+    ${blocks.join('\n    ')}
   </div>
 </body>
 </html>`;

@@ -133,29 +133,111 @@ function parseCarouselJson(text) {
   let data;
   try { data = JSON.parse(raw); }
   catch {
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error('A IA não retornou um carrossel válido — tente novamente');
-    data = JSON.parse(m[0]);
+    const jsonText = extractFirstJsonObject(raw);
+    if (!jsonText) throw new Error('A IA não retornou um carrossel válido — tente novamente');
+    data = JSON.parse(jsonText);
   }
   if (!data || !Array.isArray(data.slides) || data.slides.length === 0)
     throw new Error('A IA não retornou slides — tente novamente');
   // Sanitiza: mantém só os campos esperados e garante tipos
   const str = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  // photo: true/"fundo" = marca d'água; "forte" = foto cheia com scrim; senão null
+  const photoOf = p => p === 'forte' ? 'forte' : (p === true || p === 'fundo') ? 'fundo' : null;
   data.slides = data.slides
     .map(s => ({
       role: ['hook', 'content', 'cta'].includes(s.role) ? s.role : 'content',
-      title: str(s.title),          // só quando o usuário fornece um título
-      text: String(s.text || '').trim(),
-      signature: str(s.signature),  // assinatura (exibida menor, em itálico)
-      photo: s.photo === true,
+      kicker: str(s.kicker) || str(s.title),  // rótulo pequeno acima do conteúdo
+      headline: str(s.headline),               // manchete grande (serifada)
+      text: String(s.text || '').trim(),       // corpo
+      list: Array.isArray(s.list) ? s.list.map(x => String(x).trim()).filter(Boolean) : null,
+      quote: s.quote === true,                 // renderiza o text como frase em destaque
+      signature: str(s.signature),             // assinatura (menor, itálico)
+      align: ['center', 'left'].includes(s.align) ? s.align : null,
+      photo: photoOf(s.photo),
       bg: str(s.bg),
       textColor: str(s.textColor || s.text_color || s.cor_texto),
       accent: str(s.accent || s.cor_destaque),
     }))
-    .filter(s => s.text);
+    .filter(s => s.text || s.headline || (s.list && s.list.length));
   data.legenda = typeof data.legenda === 'string' ? data.legenda : '';
   return data;
 }
+
+// Extrai o primeiro objeto {...} balanceado (ignora texto após o JSON e chaves
+// dentro de strings). Mais seguro que um regex ganancioso quando o modelo
+// devolve o JSON seguido de comentário.
+function extractFirstJsonObject(text) {
+  const s = String(text || '');
+  const start = s.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+// ── Contrato de carrossel (compartilhado: modo GERAR e modo INTERPRETAR) ──────
+// Cada slide é uma COMPOSIÇÃO de blocos opcionais, não um texto único. É isso que
+// dá elasticidade: "headline assim / texto de baixo assim / assinatura assim"
+// tem onde morar em vez de virar tudo o mesmo parágrafo.
+const SLIDE_SHAPE = `{ "role": "hook|content|cta", "kicker": null, "headline": null, "text": null, "list": null, "quote": false, "signature": null, "photo": false, "align": null, "bg": null, "textColor": null, "accent": null }`;
+
+const CAROUSEL_CONTRACT = `Você monta CARROSSÉIS para Instagram. Leia o input inteiro como uma conversa,
+ENTENDA a intenção e monte os slides. O input mistura CONTEÚDO (o que aparece no
+slide) com INSTRUÇÕES (como ele deve ficar). Sua tarefa é separar os dois e
+distribuir o conteúdo nos BLOCOS certos de cada slide.
+
+BLOCOS DE UM SLIDE (todos opcionais — use só os que o slide precisa):
+- kicker: rótulo curto acima da manchete (ex.: "O PADRÃO", "PARTE 1"). Pequeno, caixa alta.
+- headline: a manchete grande, em fonte serifada. É o "título" / "headline" do slide.
+- text: o corpo, o "texto de baixo". Uma ou mais linhas.
+- list: quando o conteúdo é uma lista de itens (array de strings, um por item).
+- quote: true quando o "text" é uma FRASE DE DESTAQUE (a frase do post, a virada) —
+  ela é renderizada grande e em itálico, sem manchete concorrendo.
+- signature: assinatura (ex.: "Evelyn Liu — Nutricionista"). Menor, itálico, no rodapé do slide.
+
+COMO INTERPRETAR O QUE O USUÁRIO ESCREVE (exemplos):
+- "headline: Você não come à noite por fome" → { "headline": "Você não come à noite por fome" }
+- "texto de baixo: é o dia inteiro chegando de uma vez" → adiciona "text": "é o dia inteiro chegando de uma vez"
+- "assinatura Evelyn Liu" → "signature": "Evelyn Liu"
+- "esse é o slide da frase de virada: não é força de vontade, é padrão"
+    → { "quote": true, "text": "não é força de vontade, é padrão" }
+- "slide com 3 sinais: 1) ... 2) ... 3) ..." → { "list": ["...", "...", "..."] }
+- "primeiro slide só a headline bem grande" → um slide só com "headline", role "hook"
+- "foto de fundo nesse" → "photo": "fundo"  ·  "foto ocupando o slide todo" → "photo": "forte"
+- "fundo terracota no último", "texto branco", "esse é o headline" → honre exatamente (bg/textColor/headline)
+
+REGRAS:
+1. Interprete — não copie ao pé da letra. Instrução NUNCA entra dentro de um bloco de conteúdo.
+2. NÃO numere nem rotule slides. Nunca escreva "Slide 1", "Capa", "CTA" como kicker/headline.
+   kicker só existe se for conteúdo real que o usuário quer no slide.
+3. Um slide pode ter só headline, só text, headline+text, kicker+headline+text, uma list, uma quote.
+   Não force todos os blocos em todo slide — deixe respirar. Capa (hook) costuma ser só headline forte.
+4. Quando o usuário define cor/foto/assinatura/papel de um slide, isso SOBRESCREVE o padrão da marca.
+
+ESTILO / CORES (campos de aparência, null por padrão = cai no padrão da marca):
+- role: "hook" (capa, verde), "content" (miolo, bege), "cta" (final, terracota). Controla o padrão.
+- align: "center" (bom p/ capa e frase de virada) ou "left" (bom p/ texto corrido). null = automático.
+- photo: false | "fundo" (marca d'água atrás do texto) | "forte" (foto cheia, texto sobre escurecido).
+- bg: SOMENTE a paleta da marca: verde, verde-escuro, verde-claro, verde-suave, terracota,
+  terracota-escuro, terracota-claro, terracota-suave, creme, bege, creme-escuro, areia, marfim.
+  NUNCA cores fora da marca (nada de preto, branco, rosa, azul).
+- textColor / accent: só se o usuário pedir (nome PT ou hex); senão null (contraste automático).`;
 
 // Gera o conteúdo do carrossel SEPARANDO instrução de conteúdo. O modelo lê o
 // briefing (que pode misturar os dois), classifica, e devolve JSON estruturado:
@@ -164,50 +246,22 @@ async function generateCarouselContent({ pilar, briefing, user_role, nutri_name 
   const pilarCtx = PILAR_CONTEXT[pilar] || '';
   const systemPrompt = `${voiceForUser(user_role, nutri_name)}
 
-Você monta CARROSSÉIS para Instagram. O briefing funciona como INSTRUÇÕES completas
-(como uma conversa): leia tudo, ENTENDA a intenção e só então monte os slides.
-Ele pode misturar o CONTEÚDO dos slides com INSTRUÇÕES (formatação, cor de fundo,
-em qual slide usar foto, assinatura, título de um slide, número de slides, etc.).
+${CAROUSEL_CONTRACT}
 
-Regras:
-1. Interprete o briefing — não o copie ao pé da letra.
-2. Em "text" coloque APENAS o texto que aparece no slide. NUNCA coloque instrução,
-   rótulo ou número de slide dentro do "text".
-3. NÃO nomeie nem numere os slides. NUNCA gere "Slide 1", "Capa", "CTA" como título.
-   Só preencha "title" se o usuário pedir explicitamente um título para o slide.
-4. Assinatura (ex.: "assinatura Evelyn Liu — Nutricionista") vai em "signature"
-   (será exibida menor e em itálico), nunca no "text".
-5. Respeite a quantidade de slides se pedida; senão use de 5 a 7.
+Este é o modo GERAR: o briefing é uma ideia/tema. Você ESCREVE o conteúdo dos
+slides na voz da marca e o estrutura nos blocos. Se o usuário já ditou o texto
+exato de algum slide, respeite as palavras dele; no resto, escreva você.
+Se a quantidade de slides não for pedida, use de 5 a 7. Gere também a "legenda".
 
-Você tem PODER TOTAL de personalização por slide. Honre EXATAMENTE pedidos como:
-"esse slide é o headline", "muda a cor desse pra preto", "fundo terracota no
-último", "põe minha assinatura aqui", "texto branco", "esse é o slide de virada".
-Quando o usuário define cor/papel/título/assinatura de um slide, isso SOBRESCREVE
-o padrão da marca (não force capa-verde / cta-terracota se ele pediu outra coisa).
-
-Responda SOMENTE com JSON válido, sem nada antes ou depois:
+Responda SOMENTE com JSON válido (sem texto antes/depois), neste formato:
 {
-  "slides": [
-    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null, "textColor": null, "accent": null }
-  ],
+  "slides": [ ${SLIDE_SHAPE} ],
   "legenda": "legenda do post com 3-5 parágrafos + hashtags"
-}
-Campos (null por padrão — preencha quando o usuário pedir):
-- role: papel do slide ("hook" capa, "cta" final, "content" miolo) — controla o estilo padrão.
-- title: headline/título do slide (quando o usuário marca "isso é headline").
-- signature: assinatura (ex.: "Evelyn Liu — Nutricionista"), exibida menor/itálico.
-- photo: true se pedir foto naquele slide.
-- bg: cor de fundo. APENAS a paleta da marca e suas variações tonais:
-  verde, verde-escuro, verde-claro, verde-suave, terracota, terracota-escuro,
-  terracota-claro, terracota-suave, creme, bege, creme-escuro, areia, marfim.
-  NÃO use cores fora da marca (nada de preto, branco, rosa, azul, etc.).
-  Use por slide conforme o pedido; senão null (cai no padrão da marca).
-- textColor: cor do texto, se o usuário pedir (nome PT ou hex); senão null (contraste automático).
-- accent: cor de destaque (linha/realce), se pedida; senão null.`;
+}`;
 
   const text = await streamText({
     model: MODEL,
-    max_tokens: 3000,
+    max_tokens: 3200,
     system: systemPrompt,
     messages: [{ role: 'user', content: `${pilarCtx}\n\nBriefing:\n${briefing}` }],
   });
@@ -220,38 +274,22 @@ Campos (null por padrão — preencha quando o usuário pedir):
 // entende a intenção, separa instruções (assinatura, título, foto, cor) do texto
 // e organiza em slides. Devolve o mesmo JSON estruturado.
 async function interpretCarouselInput({ content }) {
-  const systemPrompt = `Você recebe o INPUT de um carrossel já escrito por um usuário. O input traz o
-CONTEÚDO dos slides e pode conter INSTRUÇÕES misturadas (assinatura, título de um
-slide, em qual slide usar foto, cor de fundo, como dividir os slides, formatação).
+  const systemPrompt = `${CAROUSEL_CONTRACT}
 
-Sua tarefa é INTERPRETAR (não executar ao pé da letra):
-1. MANTENHA o texto do usuário praticamente como está — não reescreva nem "melhore"
-   o conteúdo. Apenas remova do "text" as instruções que estiverem misturadas.
-2. Divida em slides conforme a intenção do usuário.
-3. NÃO numere nem rotule slides ("Slide 1", "Capa"...). Preencha "title" só se o
-   usuário tiver dado um título explícito ao slide.
-4. Assinatura (ex.: "assinatura Evelyn Liu — Nutricionista") vai em "signature"
-   (exibida menor e em itálico), nunca no "text".
-5. Instruções de foto/cor vão em "photo"/"bg".
+Este é o modo INTERPRETAR: o usuário JÁ escreveu o conteúdo. NÃO reescreva nem
+"melhore" as palavras dele — apenas remova do conteúdo as instruções misturadas e
+distribua o texto nos blocos certos, dividindo os slides conforme a intenção dele.
+Não gere "legenda" (deixe null) a menos que o usuário tenha escrito uma.
 
-Honre pedidos de personalização por slide (cor de fundo, headline/título, assinatura,
-foto, cor de texto) — sobrescrevem o padrão da marca quando o usuário especifica.
-
-Responda SOMENTE com JSON válido, sem nada antes ou depois:
+Responda SOMENTE com JSON válido (sem texto antes/depois), neste formato:
 {
-  "slides": [
-    { "role": "hook|content|cta", "title": null, "text": "texto do slide", "signature": null, "photo": false, "bg": null, "textColor": null, "accent": null }
-  ],
+  "slides": [ ${SLIDE_SHAPE} ],
   "legenda": null
-}
-role: "hook" primeiro, "cta" último, "content" meio. bg APENAS paleta da marca:
-verde/verde-escuro/verde-claro/verde-suave/terracota/terracota-escuro/terracota-claro/
-terracota-suave/creme/bege/creme-escuro/areia/marfim (nada fora da marca).
-title/signature/bg/textColor/accent = null por padrão (preencha só se o usuário pedir).`;
+}`;
 
   const text = await streamText({
     model: MODEL,
-    max_tokens: 3000,
+    max_tokens: 3200,
     system: systemPrompt,
     messages: [{ role: 'user', content: `Input do carrossel:\n${content}` }],
   });
