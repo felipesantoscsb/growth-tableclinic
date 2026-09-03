@@ -47,6 +47,89 @@ const AGGRESSION_GAP_S = { suave: 0.55, medio: 0.35, agressivo: 0.25 };
 const HESITATIONS = new Set(['é', 'éé', 'ééé', 'ã', 'ãã', 'ãn', 'hum', 'hmm', 'aham', 'ahn', 'eh', 'né', 'tipo', 'então']);
 
 // ════════════════════════════════════════════════════════════════════════════
+// Zona segura das plataformas (Meta Reels / Stories)
+// ════════════════════════════════════════════════════════════════════════════
+// Frações da tela reservadas pela UI do app — texto ali dentro corre risco de
+// ficar coberto. Em 1080x1920 dá: topo 250px (barra de perfil/rótulo de anúncio),
+// base 422px (legenda do post + botão de CTA), esquerda 65px, direita 140px
+// (coluna de curtir/comentar/enviar).
+// O template oficial da Meta fala em "manter o essencial dentro de 1080x1420" —
+// isso vale para elemento solto no meio da tela. A legenda fica ANCORADA na base,
+// justamente onde ficam legenda do post e botão, então aqui usamos o recuo real
+// da UI (422px) em vez dos 250px simétricos do template.
+// Tudo sobrescrevível por env p/ calibrar sem mexer em código.
+const SAFE_ZONES = {
+  reels: {
+    top:    +(process.env.SAFE_TOP    || 0.130),
+    bottom: +(process.env.SAFE_BOTTOM || 0.220),
+    left:   +(process.env.SAFE_LEFT   || 0.060),
+    right:  +(process.env.SAFE_RIGHT  || 0.130),
+  },
+  // formatos não-verticais (feed 1:1 / 16:9): só um respiro nas bordas
+  feed: { top: 0.06, bottom: 0.10, left: 0.06, right: 0.06 },
+};
+
+// Limite de caracteres do hook visual (recomendação Meta: leitura em <1s).
+const HOOK_MAX_CHARS = +(process.env.HOOK_MAX_CHARS || 40);
+
+// Converte o preset em pixels para um vídeo WxH. Os lados viram SIMÉTRICOS
+// (max(esquerda, direita)) p/ o texto continuar centralizado e ainda assim
+// escapar da coluna de ações da direita.
+function resolveSafeZone(W, H, preset) {
+  const key = SAFE_ZONES[preset] ? preset : 'reels';
+  const z = SAFE_ZONES[key];
+  const side = Math.round(W * Math.max(z.left, z.right));
+  const top = Math.round(H * z.top);
+  const bottom = Math.round(H * z.bottom);
+  return { preset: key, top, bottom, side, boxW: W - side * 2, boxH: H - top - bottom };
+}
+
+// Palavras que marcam a entrada em oferta/produto (no nosso caso, quase sempre
+// o QUIZ). Sem acento — o texto é normalizado antes de casar.
+const OFFER_KEYWORDS = /(quiz|teste|testar|clique|clica|clicar|link|bio|gratuit|gratis|formulario|cadastr|acess|descubr|descobr|arrast|abaixo|comec[ae] agora)/;
+
+// Acha o instante em que o vídeo "vira" para a oferta. Procura a 1ª palavra-chave
+// na parte final do vídeo e recua até o começo da frase, p/ o corte cair na
+// entrada da fala e não no meio dela. Retorna { at, keyword, word } ou null.
+function detectOfferMoment(words, duration, { searchFrom = 0.4, maxBackWords = 14, padS = 0.12 } = {}) {
+  const ws = (words || []).filter(w => w && w.text && Number.isFinite(w.start));
+  if (!ws.length || !(duration > 0)) return null;
+  const floor = duration * searchFrom;
+  const norm = t => String(t).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+  let hit = -1, keyword = null;
+  for (let i = 0; i < ws.length; i++) {
+    if (ws[i].start < floor) continue;
+    const m = norm(ws[i].text).match(OFFER_KEYWORDS);
+    if (m) { hit = i; keyword = m[0]; break; }
+  }
+  if (hit < 0) return null;
+  // recua até o início da frase (fronteira de sentença ou pausa)
+  let j = hit;
+  for (let n = 0; n < maxBackWords && j > 0; n++) {
+    const prev = ws[j - 1];
+    if (prev.sentenceEnd) break;
+    if (ws[j].start - prev.end >= 0.35) break;
+    j--;
+  }
+  const at = Math.max(0, ws[j].start - padS);
+  return { at: +at.toFixed(3), keyword, word: ws[hit].text };
+}
+
+// Corte seco = reenquadramento INSTANTÂNEO em `atS` (sem rampa), mantido até o
+// fim. Lido como pattern interrupt na entrada da oferta. Mesma técnica do zoom
+// de retenção (crop+scale), só que degrau em vez de rampa.
+function buildHardCutFilter(atS, { w, h, to = 1.10, focalY = 0.42 } = {}) {
+  if (!(atS > 0) || !w || !h) return null;
+  const t = Number(atS).toFixed(3);
+  const z = `if(gte(t\\,${t})\\,${Number(to).toFixed(3)}\\,1.0)`;
+  const cw = `iw/(${z})`;
+  const ch = `ih/(${z})`;
+  const cx = `(iw-${cw})*0.5`;
+  const cy = `(ih-${ch})*${Number(focalY).toFixed(3)}`;
+  return `crop=w='${cw}':h='${ch}':x='${cx}':y='${cy}',scale=${w}:${h}`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // A.0 — Detecção de granularidade
 // ════════════════════════════════════════════════════════════════════════════
 function detectTimestampGranularity(whisperOutput) {
@@ -364,10 +447,19 @@ function assTime(s) {
   return `${h}:${p(m)}:${p(sec)}.${p(cs)}`;
 }
 
-// Gera string .ass com legenda ESTÁTICA AMARELA (sem karaoke).
-// Resolução do ASS = dimensões reais do vídeo (cfg.videoW/H) p/ não distorcer.
-// Default vertical 1080x1920 (formato Reels/Stories). Fonte e margens escalam
-// pela altura; vertical sobe a legenda (MarginV maior) p/ não colar no rodapé.
+// Gera string .ass com a camada de texto do vídeo: legenda estática + hook
+// visual + bloco de CTA. Resolução do ASS = dimensões reais do vídeo
+// (cfg.videoW/H) p/ não distorcer. Default vertical 1080x1920 (Reels/Stories).
+//
+// Posicionamento tem dois modos:
+//   • cfg.safeZone ligado  → tudo ancorado na ZONA SEGURA da plataforma
+//     (resolveSafeZone): legenda na base da caixa segura, hook acima dela,
+//     CTA + seta no lugar da legenda nos últimos segundos.
+//   • desligado → layout legado (margens fixas em % da altura).
+//
+// cfg.cta = { enabled, text, durationS, arrow } desenha a "ameaça tripla" no
+// final: texto urgente + seta animada apontando para onde nasce o botão de CTA
+// (o 3º sinal — o reenquadramento seco — é feito no FFmpeg, fora daqui).
 function buildAss(blocks, cfg = {}) {
   const c = { ...DEFAULTS, ...cfg };
   const W = c.videoW || 1080;
@@ -376,14 +468,55 @@ function buildAss(blocks, cfg = {}) {
 
   const captionColor = hexToAss(c.captionColor || c.karaokeColor);
   const hookColor = hexToAss(c.visualHookColor || '#FFFFFF');
+  const ctaColor = hexToAss(c.ctaColor || '#FFFFFF');
 
   const fontSize = Math.round(H * (vertical ? 0.034 : 0.05));  // menor p/ não estourar a tela
   const hookFontSize = Math.round(H * (vertical ? 0.038 : 0.055));
-  const marginLR = Math.round(W * 0.10);                       // bloco central estreito (centralizado)
-  const marginV  = Math.round(H * (vertical ? 0.18 : 0.08));   // sobe no vertical (acima dos botões do Reels)
-  const hookMarginV = Math.round(H * (vertical ? 0.29 : 0.19));
+  const ctaFontSize = Math.round(H * (vertical ? 0.040 : 0.055));
+
+  // ── Posicionamento ────────────────────────────────────────────────────────
+  const safe = c.safeZone
+    ? resolveSafeZone(W, H, typeof c.safeZone === 'string' ? c.safeZone : (vertical ? 'reels' : 'feed'))
+    : null;
+
+  const marginLR = safe ? safe.side : Math.round(W * 0.10);    // bloco central estreito
+  const marginV  = safe ? safe.bottom : Math.round(H * (vertical ? 0.18 : 0.08));
+  const lineH = Math.round(fontSize * 1.25);
+  const hookLineH = Math.round(hookFontSize * 1.25);
+  // hook sobe acima da legenda (2 linhas + respiro) sem invadir o topo reservado
+  const hookMarginV = safe
+    ? Math.max(marginV + lineH, Math.min(marginV + lineH * 2 + Math.round(H * 0.02), H - safe.top - hookLineH * 3))
+    : Math.round(H * (vertical ? 0.29 : 0.19));
+
   const outline  = Math.max(2, Math.round(fontSize * 0.12));
   const hookOutline = Math.max(2, Math.round(hookFontSize * 0.14));
+  const ctaOutline = Math.max(3, Math.round(ctaFontSize * 0.16));
+
+  // orçamento de caracteres por linha, escalado pelo corpo de cada estilo
+  // (hook e CTA usam fonte maior que a legenda → cabem menos caracteres).
+  const maxChars = c.maxCharsPerLine || DEFAULTS.maxCharsPerLine;
+  const charsFor = size => Math.max(12, Math.round(maxChars * fontSize / size));
+
+  // ── Janela de CTA ("ameaça tripla") ───────────────────────────────────────
+  const lastEnd = (blocks || []).reduce((max, b) => Math.max(max, Number(b.end) || 0), 0);
+  const totalDur = Number(c.videoDurationS) > 0 ? Number(c.videoDurationS) : lastEnd;
+  const ctaCfg = c.cta && c.cta.enabled && String(c.cta.text || '').trim() && totalDur > 1.5
+    ? {
+        text: String(c.cta.text).trim(),
+        durationS: Math.min(6, Math.max(2, Number(c.cta.durationS) || 3)),
+        arrow: c.cta.arrow !== false,
+      }
+    : null;
+  const ctaStart = ctaCfg ? Math.max(0, totalDur - ctaCfg.durationS) : null;
+
+  // Seta: banda logo acima da linha da zona segura. A batida move a seta p/
+  // BAIXO, então a amplitude entra na conta — senão o pulo cruzaria a linha e
+  // metade da seta apareceria por trás da UI do Reels.
+  const arrowH = Math.round(H * 0.05);
+  const arrowBounce = Math.max(4, Math.round(arrowH * 0.22));
+  const arrowBand = arrowH + arrowBounce;
+  const arrowCy = H - marginV - arrowBounce - Math.round(arrowH / 2);
+  const ctaMarginV = ctaCfg && ctaCfg.arrow ? marginV + arrowBand + Math.round(H * 0.012) : marginV;
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -396,6 +529,8 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,${c.fontName},${fontSize},${captionColor},${captionColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${outline},0,2,${marginLR},${marginLR},${marginV},1
 Style: Hook,${c.fontName},${hookFontSize},${hookColor},${hookColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${hookOutline},0,2,${marginLR},${marginLR},${hookMarginV},1
+Style: Cta,${c.fontName},${ctaFontSize},${ctaColor},${ctaColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${ctaOutline},0,2,${marginLR},${marginLR},${ctaMarginV},1
+Style: CtaArrow,${c.fontName},${ctaFontSize},${captionColor},${captionColor},&H90000000,&H00000000,1,0,0,0,100,100,0,0,1,${ctaOutline},0,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
@@ -403,21 +538,73 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
   const escape = t => String(t).replace(/[{}]/g, '').replace(/\n/g, '\\N');
 
   const lines = [];
+
+  // ── Hook visual (abertura) ────────────────────────────────────────────────
   const hookText = String(c.visualHook || '').trim();
-  const lastEnd = blocks.reduce((max, b) => Math.max(max, Number(b.end) || 0), 0);
-  if (hookText && lastEnd > 0) {
-    const hookEnd = Math.min(lastEnd, Math.min(7, Math.max(3, Number(c.visualHookDurationS) || 5)));
-    lines.push(`Dialogue: 1,${assTime(0)},${assTime(hookEnd)},Hook,,0,0,0,,${escape(hookText)}`);
+  const hookRef = totalDur || lastEnd;
+  if (hookText && hookRef > 0) {
+    const hookEnd = Math.min(hookRef, Math.min(7, Math.max(3, Number(c.visualHookDurationS) || 5)));
+    // respeita as quebras do usuário; sem elas, quebra sozinho na largura segura
+    const hookBody = hookText.includes('\n')
+      ? escape(hookText)
+      : escape(wrapLines(hookText, charsFor(hookFontSize), 3).join('\n'));
+    lines.push(`Dialogue: 1,${assTime(0)},${assTime(hookEnd)},Hook,,0,0,0,,${hookBody}`);
   }
 
-  lines.push(...blocks.map(b => {
+  // ── Legenda ───────────────────────────────────────────────────────────────
+  // Na janela de CTA a legenda sai de cena: o overlay de CTA ocupa o lugar dela
+  // e duas camadas de texto empilhadas competiriam entre si.
+  let visible = blocks || [];
+  if (ctaCfg) {
+    visible = [];
+    for (const b of (blocks || [])) {
+      if (b.start >= ctaStart - 0.05) continue;
+      visible.push(b.end > ctaStart ? { ...b, end: ctaStart } : b);
+    }
+  }
+
+  lines.push(...visible.map(b => {
     // guarda final: nenhuma linha começa com pontuação
     const ls = (b.lines || [b.text]).map(l => stripLeadingPunct(l));
     const body = escape(ls.join('\\N'));
     return `Dialogue: 0,${assTime(b.start)},${assTime(b.end)},Default,,0,0,0,,${body}`;
   }));
 
+  // ── CTA "ameaça tripla" ───────────────────────────────────────────────────
+  if (ctaCfg) {
+    const ctaBody = escape(wrapLines(ctaCfg.text, charsFor(ctaFontSize), 3).join('\n'));
+    // pop-in curto: entra crescendo, chama atenção sem piscar
+    lines.push(`Dialogue: 2,${assTime(ctaStart)},${assTime(totalDur)},Cta,,0,0,0,,{\\fad(120,0)\\fscx104\\fscy104\\t(0,220,\\fscx100\\fscy100)}${ctaBody}`);
+    if (ctaCfg.arrow) lines.push(...buildCtaArrowLines(ctaStart, totalDur, { W, cy: arrowCy, size: arrowH, bounce: arrowBounce }));
+  }
+
   return header + '\n' + lines.join('\n') + '\n';
+}
+
+// Seta animada apontando para baixo (onde nasce o botão de CTA do anúncio).
+// Desenhada em vetor ASS (\p1) em vez de glifo: independe da fonte instalada.
+// A "batida" vem de meios-ciclos de \move — \t não faz loop em ASS.
+function buildCtaArrowLines(start, end, { W, cy, size, bounce, cycleS = 0.6 }) {
+  const a = Math.round(size / 2);
+  const sh = Math.max(4, Math.round(size * 0.13));   // meia-largura da haste
+  const hw = Math.max(8, Math.round(size * 0.34));   // meia-largura da ponta
+  const hy = Math.round(size * 0.02);
+  const draw = `m ${-sh} ${-a} l ${sh} ${-a} l ${sh} ${hy} l ${hw} ${hy} l 0 ${a} l ${-hw} ${hy} l ${-sh} ${hy}`;
+  const cx = Math.round(W / 2);
+  const bord = Math.max(3, Math.round(size * 0.07));   // borda do texto de CTA é grossa demais p/ vetor
+  const amp = bounce || Math.max(4, Math.round(size * 0.22));
+  const half = cycleS / 2;
+  const out = [];
+  let t = start, down = true;
+  while (t < end - 0.02) {
+    const seg = Math.min(half, end - t);
+    const ms = Math.round(seg * 1000);
+    const y1 = down ? cy : cy + amp;
+    const y2 = down ? cy + amp : cy;
+    out.push(`Dialogue: 2,${assTime(t)},${assTime(t + seg)},CtaArrow,,0,0,0,,{\\an5\\bord${bord}\\move(${cx},${y1},${cx},${y2},0,${ms})\\p1}${draw}{\\p0}`);
+    t += seg; down = !down;
+  }
+  return out;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -697,6 +884,11 @@ function writeEdl(sessionDir, edl) {
 module.exports = {
   DEFAULTS,
   AGGRESSION_GAP_S,
+  SAFE_ZONES,
+  HOOK_MAX_CHARS,
+  resolveSafeZone,
+  detectOfferMoment,
+  buildHardCutFilter,
   detectTimestampGranularity,
   cleanWordToken,
   flattenWords,
@@ -709,6 +901,7 @@ module.exports = {
   validateCaptions,
   autoFixCaptions,
   buildAss,
+  buildCtaArrowLines,
   hexToAss,
   detectJumpCuts,
   buildKeepFilter,

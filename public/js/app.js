@@ -800,6 +800,9 @@ async function repurposing(el) {
 }
 
 // ── Edição ─────────────────────────────────────────────
+// Recomendação da Meta p/ o hook em tela: legível antes do scroll.
+const HOOK_MAX_CHARS = 40;
+
 async function edicao(el) {
   el.innerHTML = `
     <div class="page-header"><h1>Edição de Vídeo</h1></div>
@@ -859,7 +862,7 @@ async function edicao(el) {
         <div class="form-group">
           <label>Hook visual <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
           <textarea id="visual-hook" rows="3" maxlength="120" placeholder="Ex: Problema genérico&#10;não tem solução"></textarea>
-          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Aparece centralizado acima da legenda. Use frases curtas, geralmente 2 a 3 linhas.</p>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Aparece centralizado acima da legenda. Use frases curtas, geralmente 2 a 3 linhas. <span id="hook-count" class="char-count">0/40</span> — a Meta recomenda até 40 caracteres para ser lido antes do scroll.</p>
         </div>
         <div class="form-group">
           <label>Duração do hook visual</label>
@@ -871,6 +874,64 @@ async function edicao(el) {
             <label><input type="radio" name="hook-duration" value="7"><span>7s</span></label>
           </div>
         </div>
+        <hr class="ed-sep">
+        <p class="ed-section">Otimizações para o algoritmo <span>(Meta Reels)</span></p>
+
+        <div class="form-group">
+          <label>Enquadramento e retenção</label>
+          <div class="flag-grid">
+            <label class="flag-option">
+              <input type="checkbox" id="flag-safezone" checked>
+              <span>Zona segura</span>
+            </label>
+            <label class="flag-option">
+              <input type="checkbox" id="flag-cta">
+              <span>CTA no final</span>
+            </label>
+          </div>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:6px">A <strong>zona segura</strong> ancora legenda e hook dentro da caixa que a UI do Reels não cobre (topo do perfil, coluna de ações e a faixa de baixo do botão de CTA).</p>
+        </div>
+
+        <div class="form-group">
+          <label>Corte seco na virada da oferta</label>
+          <div class="segmented">
+            <label><input type="radio" name="hard-cut" value="off" checked><span>Não</span></label>
+            <label><input type="radio" name="hard-cut" value="auto"><span>Automático</span></label>
+            <label><input type="radio" name="hard-cut" value="manual"><span>No segundo…</span></label>
+          </div>
+          <div id="hard-cut-manual" class="ed-inline" hidden>
+            <label for="hard-cut-at">Segundo do corte</label>
+            <input type="number" id="hard-cut-at" min="0" step="0.5" value="8">
+          </div>
+          <p style="font-size:.75rem;color:var(--muted);margin-top:6px">Reenquadra a cena de uma vez (sem transição) quando o vídeo entra na oferta. No <strong>automático</strong>, o instante sai da transcrição — a primeira menção a quiz/teste/link na parte final do vídeo.</p>
+        </div>
+
+        <div id="cta-fields" hidden>
+          <div class="form-group">
+            <label>Texto do CTA <span style="color:var(--muted);font-weight:400">(ameaça tripla)</span></label>
+            <textarea id="cta-text" rows="2" maxlength="90">Clique abaixo e faça seu teste gratuito!</textarea>
+            <p style="font-size:.75rem;color:var(--muted);margin-top:4px">Nos últimos segundos a legenda sai de cena e entra o bloco de CTA: texto urgente + seta animada apontando para onde o botão nasce. Some o corte seco e você tem os três sinais juntos.</p>
+          </div>
+          <div class="form-group">
+            <label>Duração do CTA</label>
+            <div class="segmented segmented-5">
+              <label><input type="radio" name="cta-duration" value="2"><span>2s</span></label>
+              <label><input type="radio" name="cta-duration" value="3" checked><span>3s</span></label>
+              <label><input type="radio" name="cta-duration" value="4"><span>4s</span></label>
+              <label><input type="radio" name="cta-duration" value="5"><span>5s</span></label>
+              <label><input type="radio" name="cta-duration" value="6"><span>6s</span></label>
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="flag-grid">
+              <label class="flag-option">
+                <input type="checkbox" id="flag-cta-arrow" checked>
+                <span>Seta apontando p/ o botão</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <button class="btn btn-accent" id="edit-btn">Adicionar à fila</button>
       </div>
 
@@ -893,6 +954,9 @@ async function edicao(el) {
       ops.subtitles ? `Legendas` : null,
       ops.captionColor ? `Legenda ${ops.captionColor === 'white' ? 'branca' : 'amarela'}` : null,
       ops.visualHook ? `Hook visual ${ops.visualHookDurationS || 5}s` : null,
+      ops.safeZone === false ? null : `Zona segura`,
+      ops.hardCutAppliedAtS ? `Corte seco ${ops.hardCutAppliedAtS}s` : null,
+      ops.ctaEnabled ? `CTA ${ops.ctaDurationS || 3}s${ops.ctaArrow === false ? '' : ' + seta'}` : null,
       ops.subtitles_warning ? `⚠ legenda: ${ops.subtitles_warning}` : null,
     ].filter(Boolean).join(' · ');
   }
@@ -916,6 +980,13 @@ async function edicao(el) {
       captionColor: el.querySelector('input[name="caption-color"]:checked')?.value || 'yellow',
       visualHook: el.querySelector('#visual-hook').value.trim(),
       visualHookDurationS: Number(el.querySelector('input[name="hook-duration"]:checked')?.value || 5),
+      safeZone: el.querySelector('#flag-safezone').checked,
+      hardCut: el.querySelector('input[name="hard-cut"]:checked')?.value || 'off',
+      hardCutAtS: Number(el.querySelector('#hard-cut-at').value) || 0,
+      ctaEnabled: el.querySelector('#flag-cta').checked,
+      ctaText: el.querySelector('#cta-text').value.trim(),
+      ctaDurationS: Number(el.querySelector('input[name="cta-duration"]:checked')?.value || 3),
+      ctaArrow: el.querySelector('#flag-cta-arrow').checked,
     };
   }
 
@@ -933,6 +1004,31 @@ async function edicao(el) {
     input.addEventListener('change', syncEdgeTrimAvailability);
   });
   syncEdgeTrimAvailability();
+
+  // Hook: contador de caracteres. Não trava a digitação — o limite de 40 é
+  // recomendação da Meta, não regra do editor; avisamos e deixamos passar.
+  const hookEl = el.querySelector('#visual-hook');
+  const hookCount = el.querySelector('#hook-count');
+  function syncHookCount() {
+    const n = hookEl.value.trim().length;
+    hookCount.textContent = `${n}/${HOOK_MAX_CHARS}`;
+    hookCount.classList.toggle('is-over', n > HOOK_MAX_CHARS);
+  }
+  hookEl.addEventListener('input', syncHookCount);
+  syncHookCount();
+
+  // Corte seco manual → mostra o campo de segundo
+  const hardCutManual = el.querySelector('#hard-cut-manual');
+  el.querySelectorAll('input[name="hard-cut"]').forEach(input => {
+    input.addEventListener('change', () => {
+      hardCutManual.hidden = el.querySelector('input[name="hard-cut"]:checked')?.value !== 'manual';
+    });
+  });
+
+  // CTA ligado → mostra texto/duração/seta
+  const ctaToggle = el.querySelector('#flag-cta');
+  const ctaFields = el.querySelector('#cta-fields');
+  ctaToggle.addEventListener('change', () => { ctaFields.hidden = !ctaToggle.checked; });
 
   // Poller único: consulta TODOS os jobs ativos num request em lote (evita
   // estourar o rate-limit ao polar 5+ vídeos ao mesmo tempo).
@@ -985,6 +1081,10 @@ async function edicao(el) {
     const urls = el.querySelector('#video-urls').value.split('\n').map(u => u.trim()).filter(Boolean);
     const edit_flags = getEditFlags();
     if (!urls.length) { toast('Cole pelo menos uma URL', 'error'); return; }
+    if (edit_flags.ctaEnabled && !edit_flags.ctaText) { toast('Escreva o texto do CTA ou desligue a opção', 'error'); return; }
+    if (edit_flags.visualHook.length > HOOK_MAX_CHARS) {
+      toast(`Hook com ${edit_flags.visualHook.length} caracteres (recomendado ≤${HOOK_MAX_CHARS}) — seguindo assim mesmo`);
+    }
 
     const btn = el.querySelector('#edit-btn');
     btn.disabled = true; btn.textContent = 'Enfileirando…';

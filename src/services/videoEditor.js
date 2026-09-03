@@ -156,6 +156,7 @@ function parseInstructions(instructions, duration) {
     volume: null,
     mute: false,
     grayscale: false,
+    safeZone: true,      // zona segura é padrão; desligar exige pedido explícito
   };
 
   // Normaliza acentos: "silêncios"/"silencios", "áudio"/"audio" etc. viram a
@@ -221,13 +222,36 @@ function parseInstructions(instructions, duration) {
   // Zoom de retenção (opt-in): só quando pedido explicitamente.
   if (text.match(/zoom|dinamic|retenc|movimento|pattern\s*interrupt/i)) ops.autoZoom = true;
 
+  // Otimizações de algoritmo (opt-in no texto livre; no formulário são flags).
+  if (text.match(/sem\s+zona\s*segura|sem\s+safe\s*zone/)) ops.safeZone = false;
+  if (text.match(/corte\s*seco|hard\s*cut/)) ops.hardCut = 'auto';
+  if (text.match(/\bcta\b|chamada\s+p(?:ara|ra)\s+acao|ameaca\s*tripla/)) {
+    ops.ctaEnabled = true;
+    ops.ctaText = DEFAULT_CTA_TEXT;
+    ops.ctaDurationS = 3;
+    ops.ctaArrow = true;
+  }
+
   return ops;
 }
+
+const DEFAULT_CTA_TEXT = 'Clique abaixo e faça seu teste gratuito!';
+
+// Dimensões de saída por preset de resize — o corte seco precisa saber o tamanho
+// final antes de rodar o passo principal.
+const RESIZE_DIMS = { '9:16': { w: 1080, h: 1920 }, '1:1': { w: 1080, h: 1080 }, '16:9': { w: 1920, h: 1080 } };
 
 function parseEditFlags(flags = {}) {
   const captionColor = String(flags.captionColor || 'yellow').toLowerCase() === 'white' ? 'white' : 'yellow';
   const visualHook = String(flags.visualHook || '').trim().slice(0, 120);
   const hookDuration = Math.min(7, Math.max(3, Number(flags.visualHookDurationS) || 5));
+
+  // Corte seco na virada da oferta: 'off' | 'auto' (detecta pela transcrição)
+  // | 'manual' (segundo informado pelo usuário).
+  const hardCutRaw = String(flags.hardCut || 'off').toLowerCase();
+  const hardCut = ['auto', 'manual'].includes(hardCutRaw) ? hardCutRaw : 'off';
+  const hardCutAtS = Math.max(0, Number(flags.hardCutAtS) || 0);
+
   const ops = {
     trim: null,
     resize: null,
@@ -237,6 +261,13 @@ function parseEditFlags(flags = {}) {
     captionColor,
     visualHook,
     visualHookDurationS: hookDuration,
+    safeZone: flags.safeZone !== false,          // crítico: ligado por padrão
+    hardCut,
+    hardCutAtS: hardCut === 'manual' ? hardCutAtS : null,
+    ctaEnabled: Boolean(flags.ctaEnabled),
+    ctaText: String(flags.ctaText || DEFAULT_CTA_TEXT).trim().slice(0, 90),
+    ctaDurationS: Math.min(6, Math.max(2, Number(flags.ctaDurationS) || 3)),
+    ctaArrow: flags.ctaArrow !== false,
     speed: null,
     volume: null,
     mute: false,
@@ -540,6 +571,10 @@ function runMainPass(inputPath, ops, duration, outPath) {
     else if (ops.resize === '16:9') vFilters.push('scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2');
     if (ops.speed && ops.speed !== 1.0) vFilters.push(`setpts=${(1 / ops.speed).toFixed(4)}*PTS`);
     if (ops.grayscale) vFilters.push('hue=s=0');
+    // Corte seco: entra DEPOIS do setpts (o `t` do filtro já é o tempo de saída)
+    // e ANTES da queima da legenda — senão a legenda seria ampliada junto e
+    // sairia da zona segura.
+    if (ops.hardCutFilter) vFilters.push(ops.hardCutFilter);
     if (vFilters.length > 0) cmd = cmd.videoFilters(vFilters);
 
     if (ops.mute) {
@@ -570,7 +605,7 @@ function runMainPass(inputPath, ops, duration, outPath) {
 // Queima as legendas (.srt) no vídeo. Se muteAudio, remove o áudio aqui
 // (usado quando o usuário pediu mudo + legendas: o áudio foi preservado só
 // para a transcrição e agora é descartado).
-function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) {
+function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false, safeZone = false } = {}) {
   return new Promise((resolve, reject) => {
     // Escapa o caminho para o filtro subtitles do ffmpeg
     const escaped = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
@@ -582,7 +617,10 @@ function burnSubtitles(inputPath, srtPath, outPath, { muteAudio = false } = {}) 
     // Posição: terço inferior (MarginV=60) — abaixo do rosto e acima da legenda/handle
     // do Instagram; MarginL/R=70 mantêm um bloco central estreito que sai de trás dos
     // botões da direita (curtir/comentar) sem precisar subir até o rosto.
-    const style = "force_style='Fontname=Liberation Sans,Fontsize=10,Bold=1,PrimaryColour=&H00EEF4F8,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginL=70,MarginR=70,MarginV=60'";
+    // Com zona segura ligada a margem inferior sobe p/ o recuo real da UI do
+    // Reels (SAFE_BOTTOM da altura de script ~288) em vez dos 60 fixos.
+    const marginV = safeZone ? Math.round(288 * VE.SAFE_ZONES.reels.bottom) : 60;
+    const style = `force_style='Fontname=Liberation Sans,Fontsize=10,Bold=1,PrimaryColour=&H00EEF4F8,OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,Alignment=2,MarginL=70,MarginR=70,MarginV=${marginV}'`;
     const audioOpts = muteAudio ? ['-an'] : ['-c:a copy'];
     ffmpeg(inputPath)
       .videoFilters(`subtitles='${escaped}':${style}`)
@@ -721,16 +759,41 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
     visualHook: ops.visualHook || '',
     visualHookDurationS: ops.visualHookDurationS || 5,
     visualHookColor: '#FFFFFF',
+    // Otimizações de algoritmo (Meta): zona segura + bloco de CTA no final.
+    safeZone: ops.safeZone !== false,
+    cta: {
+      enabled: Boolean(ops.ctaEnabled && ops.ctaText),
+      text: ops.ctaText || '',
+      durationS: ops.ctaDurationS || 3,
+      arrow: ops.ctaArrow !== false,
+    },
     silenceDbfs: +(process.env.SILENCE_DBFS || VE.DEFAULTS.silenceDbfs),
     ...config,
   };
 
-  const report = { whisper: null, jumpcut: null, captions: null, visualRhythm: null, fallbacks: [] };
+  const report = {
+    whisper: null, jumpcut: null, captions: null, visualRhythm: null,
+    safeZone: null, hook: null, hardCut: null, cta: null, fallbacks: [],
+  };
+
+  // Hook visual: a Meta recomenda ≤40 caracteres p/ ser lido antes do scroll.
+  // Não trunca (o texto é decisão do usuário) — sinaliza no relatório.
+  if (ops.visualHook) {
+    report.hook = {
+      chars: ops.visualHook.length,
+      limit: VE.HOOK_MAX_CHARS,
+      ok: ops.visualHook.length <= VE.HOOK_MAX_CHARS,
+    };
+    if (!report.hook.ok) {
+      report.fallbacks.push(`hook visual com ${ops.visualHook.length} caracteres (recomendado ≤${VE.HOOK_MAX_CHARS})`);
+    }
+  }
 
   // ── Transcrição única do ORIGINAL (serve jump cut + legendas) ──────────────
   // best-effort: se falhar, segue sem words (camadas degradam).
   let words = [];
-  if ((ops.subtitles || ops.removeSilence || ops.trimEdgesOnly) && !ops.mute) {
+  const needsWords = ops.subtitles || ops.removeSilence || ops.trimEdgesOnly || ops.hardCut === 'auto';
+  if (needsWords && !ops.mute) {
     try {
       const tr = await transcribeWords(inputPath, sessionDir);
       words = tr.words;
@@ -796,11 +859,54 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
     }
   }
 
+  // ── Corte seco na virada da oferta (opt-in) ───────────────────────────────
+  // Reenquadramento instantâneo no momento em que o vídeo entra em oferta/quiz:
+  // pattern interrupt sem transição, exatamente onde a retenção costuma cair.
+  if (ops.hardCut && ops.hardCut !== 'off') {
+    try {
+      let atWorking = null, keyword = null;
+      if (ops.hardCut === 'manual') {
+        atWorking = ops.hardCutAtS;
+      } else {
+        const det = VE.detectOfferMoment(words, duration);
+        if (det) { atWorking = det.at; keyword = det.keyword; }
+      }
+
+      const trimStart = ops.trim ? ops.trim.start : 0;
+      const trimEnd = ops.trim ? Math.min(ops.trim.end, duration) : duration;
+      const outDur = (trimEnd - trimStart) / (ops.speed || 1);
+      const atOut = atWorking === null ? null : (atWorking - trimStart) / (ops.speed || 1);
+
+      if (atOut === null) {
+        report.hardCut = { applied: false, reason: 'nenhuma menção a oferta/quiz encontrada na transcrição' };
+      } else if (!(atOut > 0.5 && atOut < outDur - 0.5)) {
+        report.hardCut = { applied: false, at_s: +atOut.toFixed(2), reason: 'instante fora da faixa útil do vídeo' };
+      } else {
+        const dims = RESIZE_DIMS[ops.resize] || await getVideoDims(workingInput);
+        const filter = VE.buildHardCutFilter(atOut, { w: dims.w, h: dims.h });
+        if (filter) {
+          ops.hardCutFilter = filter;
+          ops.hardCutAppliedAtS = +atOut.toFixed(2);
+          report.hardCut = { applied: true, at_s: ops.hardCutAppliedAtS, source: ops.hardCut, keyword };
+        } else {
+          report.hardCut = { applied: false, reason: 'não foi possível ler as dimensões do vídeo' };
+        }
+      }
+    } catch (e) {
+      report.hardCut = { applied: false, error: e.message };
+      report.fallbacks.push(`corte seco falhou (vídeo segue sem ele): ${e.message}`);
+    }
+  }
+
   // ── Passo 2: filtros principais (resize/speed/grayscale/volume) ────────────
-  const mainOut = ops.subtitles ? path.join(sessionDir, 'stage_main.mp4') : outputPath;
-  const deferMute = ops.mute && ops.subtitles;
+  // Camada de texto = legenda OU hook OU bloco de CTA. Qualquer uma delas exige
+  // um passo extra de queima, então o passo principal escreve num intermediário.
+  const needsOverlay = Boolean(ops.subtitles || (ops.ctaEnabled && ops.ctaText) || ops.visualHook);
+  const mainOut = needsOverlay ? path.join(sessionDir, 'stage_main.mp4') : outputPath;
+  const deferMute = ops.mute && needsOverlay;
   const mainOps = deferMute ? { ...ops, mute: false } : ops;
   await runMainPass(workingInput, mainOps, duration, mainOut);
+  delete ops.hardCutFilter;   // detalhe de implementação: não vai no ops_applied
 
   // Trim faz a timeline do vídeo voltar para 0; ajusta as palavras antes de legendar.
   if (ops.trim && words.length) {
@@ -817,17 +923,47 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
   // se o ASS falhar, queima SRT DOS MESMOS BLOCOS (texto idêntico, limpo) — NÃO
   // cai mais no SRT velho/transcrição crua. Só usa transcrição crua se não
   // houver palavras (transcrição original falhou).
+  // A camada de texto é ancorada nas dimensões e na duração REAIS do vídeo já
+  // processado — é isso que faz a zona segura e a janela de CTA caírem no lugar
+  // certo mesmo depois de corte, resize e mudança de velocidade.
+  let overlayCfg = null;
+  if (needsOverlay) {
+    const dims = await getVideoDims(mainOut);
+    const vertical = dims.h && dims.w && dims.h >= dims.w;
+    overlayCfg = {
+      ...cfg,
+      videoW: dims.w, videoH: dims.h,
+      videoDurationS: await getVideoDuration(mainOut),
+      // caixa segura é mais estreita que a tela → cabe menos caractere por linha
+      maxCharsPerLine: vertical ? (cfg.safeZone ? 22 : 24) : 42,
+      maxWords: vertical ? 5 : 7,
+      maxLines: 2,
+    };
+    if (cfg.safeZone) {
+      const sz = VE.resolveSafeZone(dims.w, dims.h, vertical ? 'reels' : 'feed');
+      report.safeZone = {
+        applied: true, preset: sz.preset,
+        caixa_px: `${sz.boxW}x${sz.boxH}`,
+        recuos_px: { topo: sz.top, base: sz.bottom, lados: sz.side },
+      };
+    } else {
+      report.safeZone = { applied: false };
+    }
+    if (cfg.cta.enabled) {
+      report.cta = {
+        applied: true,
+        text: cfg.cta.text,
+        start_s: +Math.max(0, overlayCfg.videoDurationS - cfg.cta.durationS).toFixed(2),
+        duration_s: cfg.cta.durationS,
+        seta: cfg.cta.arrow,
+      };
+    }
+  }
+
   if (ops.subtitles) {
     let burned = false;
     if (words.length) {
-      const dims = await getVideoDims(mainOut);
-      const vertical = dims.h && dims.w && dims.h >= dims.w;
-      const capCfg = {
-        ...cfg, videoW: dims.w, videoH: dims.h,
-        maxCharsPerLine: vertical ? 24 : 42,
-        maxWords: vertical ? 5 : 7,
-        maxLines: 2,
-      };
+      const capCfg = overlayCfg;
       try {
         const { assPath, blocks, report: capReport } = await buildOptimizedCaptions(words, sessionDir, capCfg);
         // 3a) tenta ASS (karaoke estático amarelo, vertical-aware)
@@ -840,8 +976,10 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
           report.fallbacks.push(`burn ASS falhou (${eAss.message}); SRT dos blocos otimizados`);
           const srtPath = path.join(sessionDir, 'subs_opt.srt');
           fs.writeFileSync(srtPath, VE.buildSrtFromBlocks(blocks));
-          await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
+          await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute, safeZone: cfg.safeZone });
           report.captions = { mode: 'srt_otimizado', ...capReport, ass_error: eAss.message };
+          // o SRT não carrega hook nem CTA — só o texto da legenda
+          if (cfg.cta.enabled) report.cta = { applied: false, reason: 'fallback SRT não suporta o bloco de CTA' };
           burned = true;
         }
       } catch (e) {
@@ -853,8 +991,9 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
       try {
         console.log('[FFmpeg] Último recurso — transcrição crua...');
         const srtPath = await transcribeToSrt(mainOut, sessionDir);
-        await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute });
+        await burnSubtitles(mainOut, srtPath, outputPath, { muteAudio: deferMute, safeZone: cfg.safeZone });
         report.captions = { mode: 'srt_cru' };
+        if (cfg.cta.enabled) report.cta = { applied: false, reason: 'fallback SRT não suporta o bloco de CTA' };
         burned = true;
       } catch (e) {
         console.error('[FFmpeg] Falha ao gerar legendas:', e.message);
@@ -863,7 +1002,22 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
         ops.subtitles = false;
         ops.subtitles_warning = e.message;
         report.captions = { mode: 'none', error: e.message };
+        if (cfg.cta.enabled) report.cta = { applied: false, reason: 'a camada de texto não foi queimada' };
       }
+    }
+  } else if (needsOverlay) {
+    // Sem legenda, mas com hook e/ou CTA: monta um ASS só com essas camadas.
+    try {
+      const ass = VE.buildAss([], overlayCfg);
+      const assPath = path.join(sessionDir, 'subs.ass');
+      fs.writeFileSync(assPath, ass);
+      await burnAss(mainOut, assPath, outputPath, { muteAudio: deferMute });
+      report.captions = { mode: 'overlay_sem_legenda' };
+    } catch (e) {
+      report.fallbacks.push(`overlay (hook/CTA) falhou: ${e.message}`);
+      if (deferMute) await stripAudio(mainOut, outputPath);
+      else fs.copyFileSync(mainOut, outputPath);
+      if (report.cta) report.cta = { applied: false, error: e.message };
     }
   }
 
@@ -873,6 +1027,8 @@ async function editVideo({ video_url, instructions, edit_flags, cardId, config =
     const finalDur = await getVideoDuration(outputPath);
     const events = [];
     if (report.captions?.captionStarts) events.push(...report.captions.captionStarts);
+    if (ops.hardCutAppliedAtS) events.push(ops.hardCutAppliedAtS);
+    if (report.cta?.applied) events.push(report.cta.start_s);
     const vr = VE.analyzeVisualRhythm(finalDur, events, cfg);
     report.visualRhythm = vr;
     stalled = vr.trechos_parados || [];

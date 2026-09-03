@@ -214,6 +214,70 @@ main#content {
   min-height: 78px;
 }
 
+#cta-text {
+  min-height: 60px;
+}
+
+/* Separador + título das otimizações de algoritmo */
+.ed-sep {
+  border: 0;
+  border-top: 1px solid var(--bege-dark);
+  margin: 22px 0 14px;
+}
+
+.ed-section {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.15rem;
+  color: var(--verde);
+  margin-bottom: 14px;
+}
+
+.ed-section span {
+  font-family: inherit;
+  font-size: .9rem;
+  color: var(--muted);
+}
+
+/* Contador de caracteres do hook */
+.char-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.char-count.is-over {
+  color: #c0392b;
+}
+
+/* Campo condicional inline (segundo do corte seco) */
+.ed-inline[hidden] { display: none; }   /* display:flex venceria o [hidden] do UA */
+
+.ed-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ed-inline label {
+  font-size: .82rem;
+  color: var(--muted);
+}
+
+.ed-inline input {
+  width: 90px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--bege-dark);
+  border-radius: 6px;
+  background: white;
+  color: var(--text);
+  font-size: .88rem;
+}
+
+.ed-inline input:focus {
+  border-color: var(--verde);
+  outline: none;
+}
+
 /* ── Buttons ── */
 .btn {
   padding: 10px 20px;
