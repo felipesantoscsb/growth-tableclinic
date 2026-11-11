@@ -320,7 +320,12 @@ async function bootstrap() {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Growth TableClinic rodando na porta ${PORT}`);
-    require('./jobs/weeklyReport').startWeeklyJob();
+    // O relatório semanal de mercado saía daqui toda segunda, 8h, pela Z-API do
+    // número comercial (a mesma instância da Karina) — com fetch próprio, fora
+    // do módulo de envio, então nunca entrou no desvio de instância feito no
+    // Hub. Desligado em 11/11/2026 para tirar peso daquele número, que foi
+    // restringido em 10/11. A análise continua disponível na tela de Growth,
+    // sob demanda.
   });
 }
 
